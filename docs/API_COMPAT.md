@@ -135,6 +135,9 @@ Both dialects return vendor-ish failure envelopes:
 
 `401` for a missing or invalid service key (`missing_api_key`, `invalid_api_key`), with `WWW-Authenticate: Bearer`.
 
+`400` for a URL the guard refuses (`url_not_allowed`) or that this deployment
+does not accept at all (`url_fetch_disabled`).
+
 `400` for bad input (`missing_media`, `ambiguous_media`, `invalid_media`,
 `invalid_url`, `invalid_base64`, `url_fetch_failed`, `url_fetch_disabled`),
 `413` for `media_too_large`. Upstream error codes are numeric and

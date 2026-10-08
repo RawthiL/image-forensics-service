@@ -125,7 +125,7 @@ project is not affiliated with or endorsed by either.
 | `src/ifs/detectors/weights.py` | Checkpoint resolution — local dir, HF hub, or explicit path |
 | `src/ifs/detectors/backends/community_forensics/` | Catalog, preprocessing, inference, license notes |
 | `src/ifs/detectors/backends/README.md` | **How to add a new backend** |
-| `src/ifs/media/` | Image loading, decompression-bomb guard, crop policies |
+| `src/ifs/media/` | Image loading, SSRF guard, decompression-bomb guard, crop policies |
 | `docs/openapi.json` | Generated OpenAPI spec (neither emulated vendor publishes one) |
 | `docs/API_COMPAT.md` | Field-by-field vendor mapping, and what is not reproduced |
 | `config.example.yaml` | Configuration reference (copy to `config.yaml`, which is gitignored) |
@@ -239,7 +239,7 @@ The request body is `multipart/form-data`:
 | Field | Notes |
 |-------|-------|
 | `media` | Image upload. JPEG, PNG, WebP, BMP, TIFF, MPO |
-| `url` | Alternative to `media`: an `http(s)` URL to fetch, if `limits.allow_url_fetch` is on |
+| `url` | Alternative to `media`: an `http(s)` URL to fetch. **Off by default** — see [Security and limits](#security-and-limits) |
 | `media_base64` | Alternative to both: base64 string or `data:` URI |
 
 The response carries the score plus two fingerprints. Every error is returned as
@@ -323,6 +323,27 @@ model runs in fp16, because at half precision the tails saturate to exactly
   `Authorization: token …` is never mistaken for the service key.
 - `/healthz` and `/readyz` stay open — an orchestrator's probe has no business
   holding the key. `/v1/models` is gated; it reveals backend internals.
+- **Image URLs are off by default.** Only images in the request payload are
+  accepted (`media`, or base64 in `media_base64`); a `url` returns `400`.
+  Fetching URLs would let any caller make the node issue requests from its own
+  network position, costs egress bandwidth, and can make answers differ between
+  suppliers if the content behind a URL changes. Opt in with
+  `limits.allow_url_fetch: true`.
+- When enabled, URL fetching is guarded against server-side request forgery
+  (SSRF). Every hop — the submitted URL and each redirect target — is resolved
+  and checked by IP, rejecting loopback, RFC1918, link-local (including the
+  `169.254.169.254` metadata address), CGNAT, reserved, unspecified and
+  multicast addresses, plus IPv6 that merely embeds one of those (v4-mapped,
+  6to4, Teredo). Redirects are followed manually for that reason: httpx's own
+  `follow_redirects` would validate only the URL the caller supplied. URLs
+  carrying credentials and non-http(s) schemes are refused, redirect chains are
+  capped, and environment proxies are ignored (`trust_env=False`) so a
+  configured proxy cannot route around the guard. Disable only in development
+  (`limits.allow_private_urls: true`).
+- The guard resolves a name and then connects, so a DNS record that changes in
+  between (rebinding) is a residual risk. Closing it needs address pinning in
+  the transport; it is a reason to leave URL fetching off, not to rely on the
+  guard alone.
 - Upload and URL body size are capped (`limits.max_image_bytes`). URL bodies are
   streamed with a running cap rather than buffered first.
 - Image dimensions are checked against `limits.max_pixels` **before** decoding
@@ -345,7 +366,8 @@ See [`config.example.yaml`](config.example.yaml). Key fields:
   selects fp16 only on CUDA.
 - `scoring.*`: crop policy, aggregation, score rounding.
 - `auth.api_key` / `auth.api_key_header`: the deployment key.
-- `limits.*`: byte cap, pixel cap, URL fetching and its timeout.
+- `limits.*`: byte cap, pixel cap, URL fetching (`allow_url_fetch`, off by
+  default), its timeout, and the SSRF guard (`allow_private_urls`).
 - `api.*`: switch either compatibility layer off.
 
 Environment variables override individual keys, nested with a double underscore
@@ -425,8 +447,9 @@ uv pip compile --python-platform x86_64-unknown-linux-gnu --extra cpu pyproject.
 
 The suite covers the vendor response shapes field-by-field, backend isolation
 (a backend that imports the API layer fails), the auth boundary including the
-vendor-key collision, and configuration validation — that a wrong config is an
-error and never a silent fallback to a different model.
+vendor-key collision, configuration validation — that a wrong config is an error
+and never a silent fallback to a different model — and the SSRF guard, including
+that a redirect to an internal address is re-validated rather than trusted.
 
 ## License
 

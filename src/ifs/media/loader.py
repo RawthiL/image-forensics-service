@@ -16,6 +16,7 @@ import httpx
 from PIL import Image, UnidentifiedImageError
 
 from ..config import Settings
+from .ssrf import MAX_REDIRECTS, UnsafeUrlError, validate_url
 
 log = logging.getLogger(__name__)
 
@@ -33,33 +34,56 @@ class MediaError(ValueError):
 
 
 async def from_url(url: str, settings: Settings) -> Image.Image:
+    """Fetch an image by URL, refusing anything that is not publicly routable.
+
+    Redirects are followed manually so every hop is validated. httpx's own
+    `follow_redirects` would check only the URL the caller handed us, and a
+    redirect to `http://169.254.169.254/` would sail through.
+    """
     if not settings.limits.allow_url_fetch:
         raise MediaError("URL fetching is disabled on this deployment", code="url_fetch_disabled")
-    if not url.lower().startswith(("http://", "https://")):
-        raise MediaError("url must be http(s)", code="invalid_url")
 
-    try:
-        # Stream so an oversized body is cut off mid-flight rather than fully
-        # buffered before we check its length.
-        async with (
-            httpx.AsyncClient(
-                timeout=settings.limits.url_fetch_timeout_s, follow_redirects=True
-            ) as client,
-            client.stream("GET", url) as resp,
-        ):
-            resp.raise_for_status()
-            buf = bytearray()
-            async for chunk in resp.aiter_bytes():
-                buf.extend(chunk)
-                if len(buf) > settings.limits.max_image_bytes:
-                    raise MediaError(
-                        f"image exceeds {settings.limits.max_image_bytes} bytes",
-                        code="media_too_large",
-                    )
-    except httpx.HTTPError as exc:
-        raise MediaError(f"could not fetch url: {exc}", code="url_fetch_failed") from exc
+    allow_private = settings.limits.allow_private_urls
+    raw = bytearray()
 
-    return decode(bytes(buf), settings)
+    # trust_env=False: an HTTP(S)_PROXY in the environment would route the
+    # request through a host the guard never checked.
+    async with httpx.AsyncClient(
+        timeout=settings.limits.url_fetch_timeout_s, follow_redirects=False, trust_env=False
+    ) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            try:
+                validate_url(url, allow_private=allow_private)
+            except UnsafeUrlError as exc:
+                raise MediaError(str(exc), code="url_not_allowed") from exc
+
+            try:
+                async with client.stream("GET", url) as resp:
+                    if resp.is_redirect:
+                        location = resp.headers.get("location")
+                        if not location:
+                            raise MediaError(
+                                "redirect without a location header", code="url_fetch_failed"
+                            )
+                        url = str(resp.url.join(location))
+                        continue
+                    resp.raise_for_status()
+                    # Stream so an oversized body is cut off mid-flight rather
+                    # than fully buffered before we check its length.
+                    async for chunk in resp.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > settings.limits.max_image_bytes:
+                            raise MediaError(
+                                f"image exceeds {settings.limits.max_image_bytes} bytes",
+                                code="media_too_large",
+                            )
+                    break
+            except httpx.HTTPError as exc:
+                raise MediaError(f"could not fetch url: {exc}", code="url_fetch_failed") from exc
+        else:
+            raise MediaError("too many redirects", code="url_fetch_failed")
+
+    return decode(bytes(raw), settings)
 
 
 def from_base64(payload: str, settings: Settings) -> Image.Image:

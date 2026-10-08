@@ -115,8 +115,25 @@ class AuthConfig(_Section):
 class LimitsConfig(_Section):
     max_image_bytes: int = 15 * 1024 * 1024
     max_pixels: int = 50_000_000
-    allow_url_fetch: bool = True
+    allow_url_fetch: bool = False
+    """Fetch caller-supplied image URLs.
+
+    **Off by default.** Fetching a URL makes this node issue requests from its
+    own network position, which is server-side request forgery unless guarded;
+    it also costs egress bandwidth and lets answers differ between suppliers
+    when the content behind a URL changes. Callers can always send the image
+    itself via `media` or `media_base64`.
+    """
+
     url_fetch_timeout_s: float = 10.0
+
+    allow_private_urls: bool = False
+    """Disable the SSRF guard. Development only.
+
+    With this on, a caller can make the node reach loopback, RFC1918,
+    link-local and cloud-metadata addresses. Never enable it on a host that
+    can see anything worth reaching.
+    """
 
 
 class ApiConfig(_Section):
