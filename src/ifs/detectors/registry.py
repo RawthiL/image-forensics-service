@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
-from typing import Callable
+from collections.abc import Callable
 
 from .base import Detector
 
@@ -80,6 +80,6 @@ def discover() -> None:
         dotted = f"{backends.__name__}.{module.name}"
         try:
             importlib.import_module(dotted)
-        except Exception as exc:  # noqa: BLE001 - a bad backend must not kill startup
+        except Exception as exc:
             _FAILED[module.name] = f"{type(exc).__name__}: {exc}"
             log.warning("backend %r unavailable: %s", module.name, exc)

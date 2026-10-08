@@ -64,7 +64,7 @@ class HiveTaskResponse(BaseModel):
         deepfake: float | None,
         media_uri: str | None,
         elapsed_s: float,
-    ) -> "HiveTaskResponse":
+    ) -> HiveTaskResponse:
         generation = [
             HiveClass(class_="ai_generated", score=ai_generated),
             HiveClass(class_="not_ai_generated", score=round(1.0 - ai_generated, 6)),

@@ -1,6 +1,7 @@
 """Configuration is authoritative: a wrong config is an error, never a fallback."""
 
 import os
+import pathlib
 
 import pytest
 import yaml
@@ -198,3 +199,29 @@ def test_path_config_never_consults_the_catalog_or_hub(tmp_path, monkeypatch):
     from ifs.detectors.weights import resolve_path
 
     assert resolve_path(ckpt).source == "path"
+
+
+def test_spec_generation_is_independent_of_local_config(tmp_path, monkeypatch):
+    """docs/openapi.json must not vary with the operator's config.yaml.
+
+    Routes and the security-scheme name are configurable, so generating the
+    spec from a local file could silently drop documented routes. The exporter
+    pins a canonical config; this asserts it stays pinned.
+    """
+    import subprocess
+    import sys
+
+    narrow = tmp_path / "config.yaml"
+    narrow.write_text(
+        "detector:\n  backend: stub\n  model: s\n"
+        "api:\n  enable_hive_dialect: false\n  enable_sightengine_dialect: false\n"
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("IFS_")}
+    env["IFS_CONFIG_FILE"] = str(narrow)
+
+    spec = pathlib.Path("docs/openapi.json")
+    before = spec.read_text()
+    subprocess.run(
+        [sys.executable, "scripts/export_openapi.py"], env=env, check=True, capture_output=True
+    )
+    assert spec.read_text() == before, "spec changed when generated under a narrower config"

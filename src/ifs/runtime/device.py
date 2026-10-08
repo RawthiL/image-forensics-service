@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def resolve_device(requested: str | None) -> "torch.device":
+def resolve_device(requested: str | None) -> torch.device:
     """`auto` picks the best available; an explicit value is honored or fails loudly."""
     import torch
 
@@ -29,7 +29,7 @@ def resolve_device(requested: str | None) -> "torch.device":
     return torch.device("cpu")
 
 
-def resolve_dtype(requested: str | None, device: "torch.device") -> "torch.dtype":
+def resolve_dtype(requested: str | None, device: torch.device) -> torch.dtype:
     """Default to fp16 on CUDA, fp32 everywhere else.
 
     fp16 on CPU is emulated and slower than fp32, and MPS half support is

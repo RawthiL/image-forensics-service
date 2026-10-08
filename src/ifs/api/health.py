@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from ..detectors.registry import available, unavailable
-from .auth import require_api_key
 from ..runtime import device
+from .auth import require_api_key
 from .deps import ServiceDep, SettingsDep
 
 router = APIRouter(tags=["ops"])

@@ -51,7 +51,11 @@ async def _check(service, settings, *, image, uri: str | None) -> SightengineRes
     )
 
 
-@router.post("/1.0/check.json", response_model=SightengineResponse, summary="Sightengine check (upload)")
+@router.post(
+    "/1.0/check.json",
+    response_model=SightengineResponse,
+    summary="Sightengine check (upload)",
+)
 async def check_post(
     service: ServiceDep,
     settings: SettingsDep,
@@ -65,7 +69,11 @@ async def check_post(
     return await _check(service, settings, image=image, uri=url)
 
 
-@router.get("/1.0/check.json", response_model=SightengineResponse, summary="Sightengine check (by URL)")
+@router.get(
+    "/1.0/check.json",
+    response_model=SightengineResponse,
+    summary="Sightengine check (by URL)",
+)
 async def check_get(
     service: ServiceDep,
     settings: SettingsDep,

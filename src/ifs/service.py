@@ -89,7 +89,11 @@ class DetectionService:
         rounded = DetectionResult(
             ai_generated=round(merged.ai_generated, s.scoring.score_decimals),
             per_class={k: round(v, s.scoring.score_decimals) for k, v in merged.per_class.items()},
-            deepfake=None if merged.deepfake is None else round(merged.deepfake, s.scoring.score_decimals),
+            deepfake=(
+                None
+                if merged.deepfake is None
+                else round(merged.deepfake, s.scoring.score_decimals)
+            ),
         )
         return ScoredImage(
             result=rounded,
@@ -105,7 +109,7 @@ def _merge(results: list[DetectionResult], how: str) -> DetectionResult:
     deepfakes = [r.deepfake for r in results if r.deepfake is not None]
     per_class: dict[str, float] = {}
     for key in {k for r in results for k in r.per_class}:
-        vals = [r.per_class[k] for r in results if k in r.per_class]
+        vals = [r.per_class[key] for r in results if key in r.per_class]
         per_class[key] = crops.aggregate(vals, how)  # type: ignore[arg-type]
     return DetectionResult(
         ai_generated=ai,

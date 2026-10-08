@@ -5,12 +5,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-
+from fastapi import Depends, FastAPI, Request
 from fastapi.openapi.utils import get_openapi
-
-from fastapi import Depends
+from fastapi.responses import JSONResponse
 
 from .api import health, hive, native, sightengine
 from .api.auth import AuthError, require_api_key, warn_if_open
@@ -35,8 +32,11 @@ already written against a commercial detection API can point at this service by
 changing its base URL and nothing else. They reshape the same inference result
 into someone else's envelope, and they inherit that envelope's limits:
 
-* `POST|GET /1.0/check.json` -- [Sightengine](https://sightengine.com/docs/ai-generated-image-detection)-shaped. The better-supported of the two.
-* `POST /api/v2/task/sync` -- [Hive](https://docs.thehive.ai/docs/ai-image-and-video-detection)-shaped. Its per-generator head is approximated.
+* `POST|GET /1.0/check.json` -- [Sightengine][se]-shaped. The better-supported of the two.
+* `POST /api/v2/task/sync` -- [Hive][hive]-shaped. Its per-generator head is approximated.
+
+[se]: https://sightengine.com/docs/ai-generated-image-detection
+[hive]: https://docs.thehive.ai/docs/ai-image-and-video-detection
 
 Vendor API keys on the compatibility routes are accepted and ignored: swapping
 the base URL is all a client should have to do.
@@ -54,7 +54,6 @@ async def lifespan(app: FastAPI):
     service = DetectionService(settings)
     app.state.service = service
     await service.start()
-    info = service.info()
     log.info(
         "ready: pipeline=%s weights=%s",
         service.pipeline_fingerprint,

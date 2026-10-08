@@ -131,6 +131,7 @@ project is not affiliated with or endorsed by either.
 | `config.example.yaml` | Configuration reference (copy to `config.yaml`, which is gitignored) |
 | `uv.lock` | Pinned dependency set for every supported platform and torch build |
 | `tests/` | Dialect contract, backend isolation, auth, and config-validation tests |
+| `.github/workflows/release.yml` | Test, then build and push the CPU and GPU images on a published release |
 
 ## Quick start
 
@@ -373,6 +374,36 @@ There is no registry list to edit — every sub-package of `backends/` is import
 at startup. The step-by-step guide is in
 [`backends/README.md`](src/ifs/detectors/backends/README.md), and
 `tests/test_detectors.py` is the contract a new backend must pass.
+
+## Releases
+
+Images are published to the GitHub Container Registry by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) when a release
+is published. The CPU build is the unsuffixed default, because this detector
+runs acceptably on commodity CPU and most suppliers will not have a GPU.
+
+| Tag | Build |
+|-----|-------|
+| `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y`, `:latest` | CPU |
+| `ghcr.io/<owner>/<repo>:X.Y.Z-gpu`, `:X.Y-gpu`, `:latest-gpu` | CUDA 12.4 |
+
+Pre-releases publish the exact `X.Y.Z` tag only, leaving `:X.Y` and `:latest`
+pointing at the last stable build. A manual run from the Actions tab publishes
+`:<branch>` and `:sha-<short>` for trying an unreleased build.
+
+To cut a release: bump `version` in `pyproject.toml`, then publish a GitHub
+release tagged `vX.Y.Z`. The workflow **fails if the tag and the project
+version disagree**, so the two cannot drift.
+
+Before pushing, the workflow checks the lock is current, lints, runs the full
+suite, verifies `docs/openapi.json` is not stale, and confirms both deployment
+targets still resolve a torch build. After pushing, it boots the published
+image against the `stub` backend and waits for `/readyz`, then attaches a
+signed build-provenance attestation.
+
+Images contain **code only**. Model weights are never baked in, and neither is
+a `config.yaml` — the service requires one to be mounted and refuses to start
+without it.
 
 ## Tests
 

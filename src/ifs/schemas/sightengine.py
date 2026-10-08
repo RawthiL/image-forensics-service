@@ -38,7 +38,7 @@ class SightengineResponse(BaseModel):
         deepfake: float | None,
         media_id: str,
         media_uri: str | None,
-    ) -> "SightengineResponse":
+    ) -> SightengineResponse:
         return cls(
             request=RequestBlock(id=request_id, timestamp=timestamp, operations=operations),
             type=TypeBlock(ai_generated=ai_generated, deepfake=deepfake),

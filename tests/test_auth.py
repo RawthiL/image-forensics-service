@@ -30,7 +30,8 @@ def secured(stub_config, monkeypatch):
 
 def test_open_by_default(client, png_bytes):
     """No key configured = no gate, so local runs and tests stay frictionless."""
-    assert client.post("/v1/detect", files={"media": ("a.png", png_bytes, "image/png")}).status_code == 200
+    r = client.post("/v1/detect", files={"media": ("a.png", png_bytes, "image/png")})
+    assert r.status_code == 200
 
 
 def test_rejects_missing_key(secured, png):

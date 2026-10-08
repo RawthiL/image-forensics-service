@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,7 +55,7 @@ class DetectorConfig(_Section):
     options: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _exactly_one_source(self) -> "DetectorConfig":
+    def _exactly_one_source(self) -> DetectorConfig:
         if self.model and self.path:
             raise ValueError(
                 "detector: set exactly one of `model` or `path`, not both "
@@ -84,7 +84,7 @@ class WeightsConfig(_Section):
     allow_download: bool = True
 
     @model_validator(mode="after")
-    def _local_needs_dir(self) -> "WeightsConfig":
+    def _local_needs_dir(self) -> WeightsConfig:
         if self.source == "local" and not self.dir:
             raise ValueError("weights: source 'local' requires `dir`")
         return self
@@ -132,7 +132,7 @@ class _YamlSource(PydanticBaseSettingsSource):
     should see the config line once, not once per internal pass.
     """
 
-    _cache: dict[tuple[str, float], dict[str, Any]] = {}
+    _cache: ClassVar[dict[tuple[str, float], dict[str, Any]]] = {}
 
     def get_field_value(self, field, field_name):  # pragma: no cover - unused hook
         raise NotImplementedError
@@ -161,7 +161,11 @@ class _YamlSource(PydanticBaseSettingsSource):
         with path.open() as fh:
             data = yaml.safe_load(fh) or {}
         if not isinstance(data, dict):
-            raise ValueError(f"{path}: expected a mapping at the top level")
+            # ValueError, not TypeError: this is a configuration fault that the
+            # caller surfaces alongside pydantic validation errors.
+            raise ValueError(  # noqa: TRY004
+                f"{path}: expected a mapping at the top level"
+            )
         log.info("configuration loaded from %s", path.resolve())
         self._cache[key] = data
         return data
@@ -194,7 +198,7 @@ class Settings(BaseSettings):
         return (init_settings, env_settings, _YamlSource(settings_cls), file_secret_settings)
 
     @model_validator(mode="after")
-    def _warn_on_ignored_weights(self) -> "Settings":
+    def _warn_on_ignored_weights(self) -> Settings:
         if self.detector.path and (
             self.weights.dir is not None or self.weights.source != "auto"
         ):

@@ -39,20 +39,23 @@ async def from_url(url: str, settings: Settings) -> Image.Image:
         raise MediaError("url must be http(s)", code="invalid_url")
 
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.limits.url_fetch_timeout_s, follow_redirects=True
-        ) as client:
-            # Stream so an oversized body is cut off mid-flight rather than
-            # fully buffered before we check its length.
-            async with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                buf = bytearray()
-                async for chunk in resp.aiter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > settings.limits.max_image_bytes:
-                        raise MediaError(
-                            f"image exceeds {settings.limits.max_image_bytes} bytes", code="media_too_large"
-                        )
+        # Stream so an oversized body is cut off mid-flight rather than fully
+        # buffered before we check its length.
+        async with (
+            httpx.AsyncClient(
+                timeout=settings.limits.url_fetch_timeout_s, follow_redirects=True
+            ) as client,
+            client.stream("GET", url) as resp,
+        ):
+            resp.raise_for_status()
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > settings.limits.max_image_bytes:
+                    raise MediaError(
+                        f"image exceeds {settings.limits.max_image_bytes} bytes",
+                        code="media_too_large",
+                    )
     except httpx.HTTPError as exc:
         raise MediaError(f"could not fetch url: {exc}", code="url_fetch_failed") from exc
 
@@ -74,7 +77,9 @@ def decode(raw: bytes, settings: Settings) -> Image.Image:
     if not raw:
         raise MediaError("empty image payload", code="empty_media")
     if len(raw) > settings.limits.max_image_bytes:
-        raise MediaError(f"image exceeds {settings.limits.max_image_bytes} bytes", code="media_too_large")
+        raise MediaError(
+            f"image exceeds {settings.limits.max_image_bytes} bytes", code="media_too_large"
+        )
 
     try:
         img = Image.open(io.BytesIO(raw))

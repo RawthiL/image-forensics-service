@@ -82,6 +82,21 @@ torchvision = [
 line-length = 100
 src = ["src", "tests"]
 
+[tool.ruff.lint]
+# Pinned explicitly so CI does not depend on whatever ruff's defaults are.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "TRY"]
+ignore = [
+    # FastAPI's whole dependency-injection idiom is calls in argument defaults
+    # (Depends, File, Form, Query, Header). Not a bug here.
+    "B008",
+    "TRY003",  # long messages in raises: our config errors are meant to be read
+    "TRY300",
+    "TRY301",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

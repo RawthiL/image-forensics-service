@@ -7,8 +7,9 @@ folder under `backends/`; it means changing nothing else.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from PIL import Image
 
@@ -30,7 +31,7 @@ class DetectionResult:
     deepfake: float | None = None
     """Optional face-manipulation score, when the backend has such a head."""
 
-    def clamped(self) -> "DetectionResult":
+    def clamped(self) -> DetectionResult:
         return DetectionResult(
             ai_generated=_clamp(self.ai_generated),
             per_class={k: _clamp(v) for k, v in self.per_class.items()},

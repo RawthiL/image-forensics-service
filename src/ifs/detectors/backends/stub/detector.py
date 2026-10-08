@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Sequence
+from collections.abc import Sequence
 
 from PIL import Image
 
