@@ -1,0 +1,43 @@
+# CPU:  docker compose up ifs-cpu
+# GPU:  docker compose --profile gpu up ifs-gpu   (needs nvidia-container-toolkit)
+#
+# ./weights is mounted in both so a checkpoint is fetched once and shared, and
+# so an air-gapped box can be handed a pre-populated directory.
+#
+# ./config.yaml is REQUIRED: no config is baked into the image, and the service
+# refuses to start without one rather than defaulting to some model.
+# Copy config.example.yaml to config.yaml first.
+
+services:
+  ifs-cpu:
+    build:
+      context: .
+      target: cpu
+    ports: ["8000:8000"]
+    volumes: ["./weights:/weights", "./config.yaml:/app/config.yaml:ro"]
+    environment:
+      IFS_RUNTIME__DEVICE: cpu
+      IFS_RUNTIME__DTYPE: float32
+      HF_HUB_CACHE: /weights/hub
+      # Unset on the host = open deployment. Generate: openssl rand -hex 32
+      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+
+  ifs-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      target: gpu
+    ports: ["8000:8000"]
+    volumes: ["./weights:/weights", "./config.yaml:/app/config.yaml:ro"]
+    environment:
+      IFS_RUNTIME__DEVICE: cuda
+      IFS_RUNTIME__DTYPE: float16
+      HF_HUB_CACHE: /weights/hub
+      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]

@@ -1,0 +1,66 @@
+# Image Forensics Service -- authoritative configuration.
+#
+# Environment variables override individual keys, nested with a double
+# underscore:  IFS_DETECTOR__MODEL=commfor-224, IFS_AUTH__API_KEY=...
+# Point at a different file with IFS_CONFIG_FILE=/path/to/config.yaml.
+#
+# A key this file does not recognise is an error, not a silent no-op.
+
+detector:
+  backend: community-forensics
+
+  # Select the checkpoint by EITHER `model` (a name in the backend's catalog)
+  # OR `path` (a file on disk). Never both, never neither.
+  model: commfor-384
+  # revision: <sha>          # override the catalog's pinned revision
+
+  # --- or load a checkpoint of your own ---
+  # path: ./weights/my-finetune.safetensors
+  # variant: vit-s16-384     # REQUIRED with `path`: a file does not state
+  #                          # which architecture it is. Mismatch = startup error.
+
+  options: {}                # backend-specific extras, passed through verbatim
+
+weights:
+  source: auto               # auto | local | hub
+                             #   local -> only weights.dir, error if absent
+                             #   hub   -> only the HF cache/hub
+                             #   auto  -> local first, then hub (same file, not
+                             #            a substitution of one model for another)
+  dir: null                  # e.g. ./weights ; layout is <dir>/<org>/<repo>/<file>
+  allow_download: true       # false on an air-gapped box: error instead of fetching
+
+runtime:
+  device: auto               # auto | cpu | cuda | cuda:0 | mps
+  dtype: auto                # auto | float32 | float16 | bfloat16
+                             # auto = fp16 on CUDA, fp32 elsewhere
+
+scoring:
+  # Detectors score a fixed-size crop. `center` resizes the whole frame down to
+  # reach it, which destroys the high-frequency artifacts these models key on;
+  # `five` takes crops at native resolution instead. On real-world images that
+  # difference dominates everything else -- see README, "Why five crops".
+  crop_policy: five          # center | five | tiled
+  crop_aggregation: max      # max | mean
+  crop_size_fallback: 384    # used when a backend declares no native input size
+  score_decimals: 4
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+auth:
+  # Single shared key gating the deployment ("only our relay miner may reach
+  # this container"). Not user auth. null = every route open.
+  api_key: null
+  api_key_header: X-API-Key
+
+limits:
+  max_image_bytes: 15728640  # 15 MiB
+  max_pixels: 50000000       # decompression-bomb ceiling
+  allow_url_fetch: true
+  url_fetch_timeout_s: 10.0
+
+api:
+  enable_sightengine_dialect: true
+  enable_hive_dialect: true

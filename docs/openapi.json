@@ -1,0 +1,878 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Image Forensics Service",
+    "description": "\nAI-generated image detection.\n\n**`POST /v1/detect` is this service's API.** It is the surface this project\nspecifies, documents and versions, and the one to write new integrations\nagainst. It is the only route without vendor baggage, and the only one that\nreturns the model and pipeline fingerprints a caller needs to reason about\nreproducibility.\n\n**The vendor routes are compatibility layers.** They exist so an application\nalready written against a commercial detection API can point at this service by\nchanging its base URL and nothing else. They reshape the same inference result\ninto someone else's envelope, and they inherit that envelope's limits:\n\n* `POST|GET /1.0/check.json` -- [Sightengine](https://sightengine.com/docs/ai-generated-image-detection)-shaped. The better-supported of the two.\n* `POST /api/v2/task/sync` -- [Hive](https://docs.thehive.ai/docs/ai-image-and-video-detection)-shaped. Its per-generator head is approximated.\n\nVendor API keys on the compatibility routes are accepted and ignored: swapping\nthe base URL is all a client should have to do.\n\nNeither vendor publishes an OpenAPI specification. This one is authoritative for\nthis service only; the compatibility routes are documented here as a convenience\nand are described normatively by `docs/API_COMPAT.md`.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Liveness probe",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Readiness probe (model loaded)",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Readyz Readyz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Active backend and what else is installed",
+        "operationId": "models_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Models V1 Models Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/detect": {
+      "post": {
+        "tags": [
+          "detection"
+        ],
+        "summary": "Score one image",
+        "operationId": "detect_v1_detect_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_detect_v1_detect_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
+    },
+    "/1.0/check.json": {
+      "post": {
+        "tags": [
+          "compat: sightengine"
+        ],
+        "summary": "Sightengine check (upload)",
+        "operationId": "check_post_1_0_check_json_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_check_post_1_0_check_json_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SightengineResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "compat: sightengine"
+        ],
+        "summary": "Sightengine check (by URL)",
+        "operationId": "check_get_1_0_check_json_get",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "URL of the image to analyze",
+              "title": "Url"
+            },
+            "description": "URL of the image to analyze"
+          },
+          {
+            "name": "models",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "genai",
+              "title": "Models"
+            }
+          },
+          {
+            "name": "api_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api User"
+            }
+          },
+          {
+            "name": "api_secret",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SightengineResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v2/task/sync": {
+      "post": {
+        "tags": [
+          "compat: hive"
+        ],
+        "summary": "Hive sync task",
+        "operationId": "task_sync_api_v2_task_sync_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_task_sync_api_v2_task_sync_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HiveTaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_check_post_1_0_check_json_post": {
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "models": {
+            "type": "string",
+            "title": "Models",
+            "default": "genai"
+          },
+          "api_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api User"
+          },
+          "api_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Secret"
+          }
+        },
+        "type": "object",
+        "title": "Body_check_post_1_0_check_json_post"
+      },
+      "Body_detect_v1_detect_post": {
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media",
+            "description": "Image file upload"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL of an image to fetch"
+          },
+          "media_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Base64",
+            "description": "Base64 image, data: URL accepted"
+          }
+        },
+        "type": "object",
+        "title": "Body_detect_v1_detect_post"
+      },
+      "Body_task_sync_api_v2_task_sync_post": {
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "title": "Body_task_sync_api_v2_task_sync_post"
+      },
+      "DetectResponse": {
+        "properties": {
+          "ai_generated": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Ai Generated",
+            "description": "P(image is AI-generated)"
+          },
+          "deepfake": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deepfake"
+          },
+          "per_class": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Per Class"
+          },
+          "model_fingerprint": {
+            "type": "string",
+            "title": "Model Fingerprint",
+            "description": "Identity of the model alone"
+          },
+          "pipeline_fingerprint": {
+            "type": "string",
+            "title": "Pipeline Fingerprint",
+            "description": "Model identity plus the service-level scoring policy"
+          },
+          "crops_scored": {
+            "type": "integer",
+            "title": "Crops Scored"
+          },
+          "elapsed_ms": {
+            "type": "number",
+            "title": "Elapsed Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ai_generated",
+          "model_fingerprint",
+          "pipeline_fingerprint",
+          "crops_scored",
+          "elapsed_ms"
+        ],
+        "title": "DetectResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HiveClass": {
+        "properties": {
+          "class": {
+            "type": "string",
+            "title": "Class"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class",
+          "score"
+        ],
+        "title": "HiveClass"
+      },
+      "HiveInput": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "ai-generated-image-detection"
+          },
+          "media": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Media"
+          }
+        },
+        "type": "object",
+        "title": "HiveInput"
+      },
+      "HiveOutput": {
+        "properties": {
+          "time": {
+            "type": "number",
+            "title": "Time",
+            "default": 0.0
+          },
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/HiveClass"
+            },
+            "type": "array",
+            "title": "Classes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "classes"
+        ],
+        "title": "HiveOutput"
+      },
+      "HiveResponseBody": {
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/HiveInput"
+          },
+          "output": {
+            "items": {
+              "$ref": "#/components/schemas/HiveOutput"
+            },
+            "type": "array",
+            "title": "Output"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input",
+          "output"
+        ],
+        "title": "HiveResponseBody"
+      },
+      "HiveStatusCode": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "default": "0"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "SUCCESS"
+          }
+        },
+        "type": "object",
+        "title": "HiveStatusCode"
+      },
+      "HiveStatusItem": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/HiveStatusCode"
+          },
+          "response": {
+            "$ref": "#/components/schemas/HiveResponseBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "response"
+        ],
+        "title": "HiveStatusItem"
+      },
+      "HiveTaskResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "default": 200
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id",
+            "default": 0
+          },
+          "status": {
+            "items": {
+              "$ref": "#/components/schemas/HiveStatusItem"
+            },
+            "type": "array",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "HiveTaskResponse"
+      },
+      "MediaBlock": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "MediaBlock"
+      },
+      "RequestBlock": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "timestamp": {
+            "type": "number",
+            "title": "Timestamp"
+          },
+          "operations": {
+            "type": "integer",
+            "title": "Operations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "timestamp",
+          "operations"
+        ],
+        "title": "RequestBlock"
+      },
+      "SightengineResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "success"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestBlock"
+          },
+          "type": {
+            "$ref": "#/components/schemas/TypeBlock"
+          },
+          "media": {
+            "$ref": "#/components/schemas/MediaBlock"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request",
+          "type",
+          "media"
+        ],
+        "title": "SightengineResponse"
+      },
+      "TypeBlock": {
+        "properties": {
+          "ai_generated": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Ai Generated"
+          },
+          "deepfake": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deepfake"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ai_generated"
+        ],
+        "title": "TypeBlock"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "ServiceApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Single shared key gating the deployment. Set server-side via IFS_API_KEY; when unset, every route is open. This is a deployment boundary, not user authentication -- it carries no caller identity. Distinct from the vendor keys on the compatibility routes, which are accepted and ignored."
+      },
+      "ServiceBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The same key as ServiceApiKey, sent as `Authorization: Bearer <key>`. Only the Bearer scheme is read: `Authorization: token ...` on a compatibility route is a vendor credential and stays ignored."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "detection",
+      "description": "**Primary API.** Write new integrations against this."
+    },
+    {
+      "name": "ops",
+      "description": "Health, readiness, and the active backend."
+    },
+    {
+      "name": "compat: sightengine",
+      "description": "Compatibility layer. Mimics `api.sightengine.com/1.0/check.json?models=genai`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
+    },
+    {
+      "name": "compat: hive",
+      "description": "Compatibility layer. Mimics `api.thehive.ai/api/v2/task/sync`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
+    }
+  ]
+}

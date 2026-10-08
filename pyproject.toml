@@ -1,0 +1,89 @@
+[project]
+name = "image-forensics-service"
+version = "0.1.0"
+description = "AI-generated image detection served behind its own OpenAPI plus Sightengine- and Hive-compatible layers."
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-multipart>=0.0.12",
+    "httpx>=0.27",
+    "pillow>=10.4",
+    "huggingface-hub>=0.25",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Torch build. Pick exactly one -- they install the same distributions from
+# different indexes, so the version ranges are identical and only the index
+# differs. See [tool.uv.sources].
+cpu = ["torch>=2.2", "torchvision>=0.17"]
+cu124 = ["torch>=2.2", "torchvision>=0.17"]
+
+# One extra per backends/<model>, so the API installs without a model's stack.
+community-forensics = ["timm>=1.0.9", "safetensors>=0.4"]
+
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.7"]
+
+[project.scripts]
+ifs-serve = "ifs.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ifs"]
+
+[tool.uv]
+# `cpu` and `cu124` install the same distributions from different indexes.
+conflicts = [[{ extra = "cpu" }, { extra = "cu124" }]]
+
+# PyTorch stopped publishing Intel-macOS wheels after 2.2.2, so the resolver
+# lands there on its own -- no version cap is needed, and adding one would leak
+# into the universal lock and pin Linux to 2.2.2 as well. What IS needed is the
+# NumPy bound: torch 2.2.2 predates NumPy 2 and segfaults against it.
+constraint-dependencies = [
+    "numpy<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
+# Intel macOS is a first-class dev target here, so the lock must carry a wheel
+# that runs on it. Without this uv resolves torch to an arm64-only build and
+# `uv sync` fails on an Intel Mac.
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+# The cu124 index publishes Linux wheels only. The marker keeps the lock
+# solvable on macOS, where that extra falls back to the default index.
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux'" },
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["src"]
+asyncio_mode = "auto"
