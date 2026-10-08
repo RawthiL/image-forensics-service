@@ -150,9 +150,15 @@ def test_missing_named_config_file_is_an_error(tmp_path, monkeypatch):
         Settings()
 
 
-def test_shipped_config_yaml_is_valid(monkeypatch):
-    """The repo's own config.yaml must always parse -- it is the operator's
-    file and may select a checkpoint by either `model` or `path`."""
+def test_local_config_yaml_is_valid_if_present(monkeypatch):
+    """Sanity-check the operator's own config.yaml when there is one.
+
+    `config.yaml` is gitignored -- it holds local paths and the deployment key
+    -- so it does not exist on a clean checkout or a CI runner. Skip there
+    rather than fail: `config.example.yaml` is the tracked file CI must guard.
+    """
+    if not pathlib.Path("config.yaml").is_file():
+        pytest.skip("no local config.yaml (expected on a clean checkout)")
     for var in [v for v in os.environ if v.startswith("IFS_")]:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("IFS_CONFIG_FILE", "config.yaml")
@@ -162,11 +168,23 @@ def test_shipped_config_yaml_is_valid(monkeypatch):
 
 
 def test_example_config_is_valid(monkeypatch):
+    """The tracked reference config must parse -- it is what operators copy."""
     for var in [v for v in os.environ if v.startswith("IFS_")]:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("IFS_CONFIG_FILE", "config.example.yaml")
     s = Settings()
     assert s.detector.backend == "community-forensics"
+    assert bool(s.detector.model) ^ bool(s.detector.path)
+
+
+def test_example_config_ships_the_safe_defaults(monkeypatch):
+    """The file people copy must not hand them a URL-fetching deployment."""
+    for var in [v for v in os.environ if v.startswith("IFS_")]:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("IFS_CONFIG_FILE", "config.example.yaml")
+    s = Settings()
+    assert s.limits.allow_url_fetch is False, "example config enables SSRF-prone URL fetching"
+    assert s.limits.allow_private_urls is False, "example config disables the SSRF guard"
 
 
 # -- the absent-config trap ----------------------------------------------
