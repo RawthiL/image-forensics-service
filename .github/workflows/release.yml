@@ -69,9 +69,15 @@ jobs:
         # Produces weights/onnx/*.onnx so the runtime-parity tests run for real
         # rather than skipping. The export verifies itself against the torch
         # checkpoint and fails if they disagree.
-        run: >
-          uv run python -m ifs.detectors.backends.community_forensics.export
-          --model commfor-384 --out-dir ./weights
+        run: |
+          uv run python -m ifs.detectors.backends.community_forensics.export \
+            --model commfor-384 --out-dir ./weights
+          # torch's dynamo exporter writes weights externally by default; a
+          # sidecar here means the Triton repository copy has no weights.
+          if [ -f weights/onnx/commfor-384.onnx.data ]; then
+            echo "::error::export produced external weights; the artifact must be self-contained"
+            exit 1
+          fi
 
       - name: Lint
         run: uv run ruff check src tests

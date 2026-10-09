@@ -235,3 +235,36 @@ def test_all_three_runtimes_are_registered():
         "community-forensics-triton",
     ):
         assert name in available()
+
+
+@pytest.mark.skipif(not ONNX_ARTIFACT.is_file(), reason="needs the exported artifact")
+def test_exported_artifact_is_self_contained():
+    """No sibling `.onnx.data`.
+
+    torch >= 2.9's dynamo exporter writes weights externally by default, which
+    produces an 81 KB .onnx plus an 87 MB .data file. Anything that copies only
+    the .onnx -- the Triton model repository, a release asset, a volume mount --
+    then has a graph with no weights that fails at load, not at copy.
+    """
+    sidecar = ONNX_ARTIFACT.with_suffix(ONNX_ARTIFACT.suffix + ".data")
+    assert not sidecar.exists(), f"weights were written externally to {sidecar}"
+    assert ONNX_ARTIFACT.stat().st_size > 50_000_000, (
+        f"{ONNX_ARTIFACT} is {ONNX_ARTIFACT.stat().st_size} bytes; the weights are "
+        f"probably external"
+    )
+
+
+@pytest.mark.skipif(
+    not pathlib.Path("weights/triton/commfor-384/1/model.onnx").is_file(),
+    reason="needs the exported Triton repository",
+)
+def test_triton_model_repository_copy_loads_standalone():
+    """The Triton copy must work on its own -- Triton only gets that directory."""
+    ort = pytest.importorskip("onnxruntime")
+    import numpy as np
+
+    sess = ort.InferenceSession(
+        "weights/triton/commfor-384/1/model.onnx", providers=["CPUExecutionProvider"]
+    )
+    out = sess.run(None, {"pixel_values": np.zeros((1, 3, 384, 384), np.float32)})[0]
+    assert out.shape == (1, 1)
