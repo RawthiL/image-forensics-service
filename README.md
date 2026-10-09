@@ -51,12 +51,59 @@ asserts backends never import `ifs.api`, `ifs.schemas` or `ifs.service`.
 | Community Forensics | [`backends/community_forensics`](src/ifs/detectors/backends/community_forensics/) | `commfor-384`, `commfor-224` (ViT-S/16, binary head) | MIT | MIT ✅ (training data CC-BY-4.0) |
 | Stub | [`backends/stub`](src/ifs/detectors/backends/stub/) | none — hashes pixels, for CI | this repo | — |
 
-Backend dependencies are packaging extras, so you can install a service that
-contains only the models you intend to run:
+### Runtimes
+
+Models can be served by three interchangeable runtimes. They share one
+catalog and one preprocessing implementation, and produce **identical scores** —
+measured, not assumed. Pick on deployment constraints, not accuracy.
+
+| `detector.backend` | Build target | Needs | Inference | Image | RSS under load |
+|---|---|---|---|---|---|
+| `community-forensics-triton` | `triton` | `triton` extra (numpy only) | remote Triton | **489 MB** | **~99 MB** |
+| `community-forensics-onnx` | `onnx` / `onnx-gpu` | `onnx-cpu` / `onnx-gpu` extra | in-process | 589 MB | ~410 MB |
+| `community-forensics` | `cpu` / `gpu` | `cpu`/`cu124` + `community-forensics` | in-process | 1.7 / 9.2 GB | 577 / 759 MB |
+
+See [Run it](#3-run-it) for the matching compose service and published tag.
+
+
+The ONNX artifact is produced locally, because upstream publishes safetensors
+only:
 
 ```bash
-uv sync --extra cpu --extra community-forensics
+uv run python -m ifs.detectors.backends.community_forensics.export \
+    --model commfor-384 --out-dir ./weights
 ```
+
+That writes `weights/onnx/commfor-384.onnx` for the ONNX runtime and a complete
+Triton model repository at `weights/triton/commfor-384/` (`config.pbtxt` with
+dynamic batching, plus `1/model.onnx`). The export verifies itself against the
+torch checkpoint and refuses to write a model that disagrees.
+
+### Triton
+
+If you already run Triton for other services, this backend adds almost nothing:
+no torch, no onnxruntime, no weights and no GPU on the service side -- it
+preprocesses and speaks HTTP. Measured: **99 MB** resident, against 410 MB for
+the in-process ONNX runtime. Use the `triton` image and the `ifs-triton` compose
+service, which reserves no GPU:
+
+```bash
+IFS_TAG=0.1.0 docker compose --profile triton up ifs-triton
+```
+
+Point Triton at the exported repository and configure:
+
+```yaml
+detector:
+  backend: community-forensics-triton
+  # No `model` or `path`: the checkpoint lives on the Triton server and is
+  # named by options.model_name.
+  options:
+    url: http://triton:8000
+    model_name: commfor-384
+    variant: vit-s16-384      # fixes preprocessing, which stays client-side
+```
+
 
 `GET /v1/models` reports what is loaded, what else is installed, and why any
 backend folder failed to import.
@@ -123,7 +170,8 @@ project is not affiliated with or endorsed by either.
 | `src/ifs/detectors/base.py` | The `Detector` protocol every model implements |
 | `src/ifs/detectors/registry.py` | Folder auto-discovery |
 | `src/ifs/detectors/weights.py` | Checkpoint resolution — local dir, HF hub, or explicit path |
-| `src/ifs/detectors/backends/community_forensics/` | Catalog, preprocessing, inference, license notes |
+| `src/ifs/detectors/backends/community_forensics/` | Catalog, preprocessing (torch + numpy), three runtimes, ONNX/Triton export, license notes |
+| `tests/mock_triton.py` | KServe v2 stand-in backed by onnxruntime, so the Triton runtime is testable without a 17 GB container |
 | `src/ifs/detectors/backends/README.md` | **How to add a new backend** |
 | `src/ifs/media/` | Image loading, SSRF guard, decompression-bomb guard, crop policies |
 | `docs/openapi.json` | Generated OpenAPI spec (neither emulated vendor publishes one) |
@@ -132,6 +180,7 @@ project is not affiliated with or endorsed by either.
 | `uv.lock` | Pinned dependency set for every supported platform and torch build |
 | `tests/` | Dialect contract, backend isolation, auth, and config-validation tests |
 | `.github/workflows/release.yml` | Test, then build and push the CPU and GPU images on a published release |
+| `docker-compose.yml` | Runs the published images; `build` profile builds locally instead |
 
 ## Quick start
 
@@ -171,15 +220,62 @@ startup naming the valid options.
 
 ### 3. Run it
 
+**Pick a runtime, then read across.** Every column on a row goes together.
+
+| Runtime (`detector.backend`) | Build target | Compose service | Published tag | Needs a GPU? |
+|---|---|---|---|---|
+| `community-forensics-triton` | `triton` | `ifs-triton` | `:X.Y.Z-triton` | **No** — inference is on your Triton |
+| `community-forensics-onnx` | `onnx` | `ifs` | `:X.Y.Z` | No |
+| `community-forensics-onnx` | `onnx-gpu` | `ifs-gpu` | `:X.Y.Z-onnx-gpu` | Yes |
+| `community-forensics` (torch) | `cpu` | `ifs-torch` | `:X.Y.Z-torch` | No |
+| `community-forensics` (torch) | `gpu` | `ifs-torch-gpu` | `:X.Y.Z-torch-gpu` | Yes |
+
+**If you run the Triton backend, you want the `triton` image.** It contains no
+model runtime at all — no torch, no onnxruntime, no weights, no GPU — because
+inference happens on your Triton server. It is the smallest image (489 MB) and
+the lightest process (~99 MB resident).
+
+#### Build it yourself
+
 ```bash
-docker compose up ifs-cpu                      # CPU, +cpu torch wheel (~1GB image)
-docker compose --profile gpu up ifs-gpu        # GPU, CUDA wheels (needs nvidia-container-toolkit)
+docker build --target triton -t ifs:triton .     # Triton backend
+docker build --target onnx   -t ifs:onnx   .     # ONNX, CPU
+docker build --target gpu    -t ifs:gpu    .     # torch, CUDA
 ```
 
-Compose mounts `./weights:/weights` and `./config.yaml:/app/config.yaml`.
-The startup line `configuration loaded from <path>` confirms which file was
-actually read; `ready: pipeline=... weights=...` confirms where the checkpoint
-came from.
+Or through compose, which tags `:dev` so a local build never shadows a pulled
+release:
+
+```bash
+docker compose --profile build up ifs-triton-build
+docker compose --profile build up ifs-build          # onnx
+docker compose --profile build up ifs-gpu-build      # onnx-gpu
+```
+
+#### Or pull a published image
+
+```bash
+IFS_TAG=0.1.0 docker compose --profile triton up ifs-triton   # Triton backend
+IFS_TAG=0.1.0 docker compose up ifs                           # ONNX, CPU
+IFS_TAG=0.1.0 docker compose --profile gpu up ifs-gpu         # ONNX, CUDA
+IFS_TAG=0.1.0 docker compose --profile torch up ifs-torch     # torch, CPU
+IFS_TAG=0.1.0 docker compose --profile torch up ifs-torch-gpu # torch, CUDA
+```
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `IFS_TAG` | `latest` | A release (`0.1.0`), a branch build (`main`), or a sha tag. **Pin a release in production.** `latest` exists only once a GitHub release has been published |
+| `IFS_IMAGE` | `ghcr.io/rawthil/image-forensics-service` | Override for a fork or a mirror |
+| `IFS_PULL_POLICY` | `missing` | Set `always` to re-pull a moving tag on every `up` |
+
+Each service appends its own suffix to `IFS_TAG`; you pass the bare version.
+`docker compose pull` refreshes a moving tag.
+
+Compose mounts `./config.yaml:/etc/ifs/config.yaml` for every service, and
+`./weights:/weights` for the ones that load a checkpoint locally (`ifs-triton`
+needs no weights). The startup line `configuration loaded from <path>` confirms
+which file was read; `ready: pipeline=... weights=...` confirms where the
+checkpoint came from.
 
 Locally, without containers:
 
@@ -401,13 +497,20 @@ at startup. The step-by-step guide is in
 
 Images are published to the GitHub Container Registry by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) when a release
-is published. The CPU build is the unsuffixed default, because this detector
-runs acceptably on commodity CPU and most suppliers will not have a GPU.
+is published. The lean ONNX/CPU build is the unsuffixed default: it serves the
+same model as the torch images at roughly a third of the memory, and most
+suppliers will not have a GPU.
 
-| Tag | Build |
-|-----|-------|
-| `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y`, `:latest` | CPU |
-| `ghcr.io/<owner>/<repo>:X.Y.Z-gpu`, `:X.Y-gpu`, `:latest-gpu` | CUDA 12.4 |
+All tags are under `ghcr.io/<owner>/<repo>`, and each moving tag (`:X.Y`,
+`:latest`) carries the same suffix as its exact version.
+
+| Tag | Build target | Runtime |
+|-----|--------------|---------|
+| `:X.Y.Z`, `:X.Y`, `:latest` | `onnx` | ONNX Runtime, CPU (the default) |
+| `:X.Y.Z-triton` | `triton` | Triton client, no local model runtime |
+| `:X.Y.Z-onnx-gpu` | `onnx-gpu` | ONNX Runtime, CUDA |
+| `:X.Y.Z-torch` | `cpu` | torch, CPU |
+| `:X.Y.Z-torch-gpu` | `gpu` | torch, CUDA |
 
 Pre-releases publish the exact `X.Y.Z` tag only, leaving `:X.Y` and `:latest`
 pointing at the last stable build. A manual run from the Actions tab publishes

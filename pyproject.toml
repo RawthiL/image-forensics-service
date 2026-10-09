@@ -1,6 +1,6 @@
 [project]
 name = "image-forensics-service"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-generated image detection served behind its own OpenAPI plus Sightengine- and Hive-compatible layers."
 license = "MIT"
 readme = "README.md"
@@ -24,8 +24,26 @@ dependencies = [
 cpu = ["torch>=2.2", "torchvision>=0.17"]
 cu124 = ["torch>=2.2", "torchvision>=0.17"]
 
-# One extra per backends/<model>, so the API installs without a model's stack.
+# One extra per backend runtime, so the API installs without a model's stack.
+# The torch runtime, and the export tooling that produces the ONNX artifacts.
 community-forensics = ["timm>=1.0.9", "safetensors>=0.4"]
+
+# Lean in-process runtime: ~173 MB of dependencies against ~1.1 GB for torch
+# CPU and ~5.5 GB for torch CUDA, serving the same model.
+onnx-cpu = ["onnxruntime>=1.18", "numpy>=1.26"]
+# onnxruntime-gpu publishes Linux wheels only, like the CUDA torch wheels.
+onnx-gpu = [
+    "onnxruntime-gpu>=1.18; sys_platform == 'linux'",
+    "numpy>=1.26",
+]
+# Remote inference: no model runtime at all. numpy is still needed, because
+# preprocessing stays client-side and the KServe binary protocol ships raw
+# tensor bytes. httpx is already a core dependency.
+triton = ["numpy>=1.26"]
+
+# Export tooling: turns a safetensors checkpoint into the ONNX artifact and a
+# Triton model repository. Needs torch too, via the `community-forensics` extra.
+onnx-export = ["onnx>=1.16", "onnxruntime>=1.18"]
 
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.7"]
 
@@ -41,7 +59,12 @@ packages = ["src/ifs"]
 
 [tool.uv]
 # `cpu` and `cu124` install the same distributions from different indexes.
-conflicts = [[{ extra = "cpu" }, { extra = "cu124" }]]
+conflicts = [
+    [{ extra = "cpu" }, { extra = "cu124" }],
+    # Both provide the `onnxruntime` module; together, which one an import
+    # resolves to depends on install order.
+    [{ extra = "onnx-cpu" }, { extra = "onnx-gpu" }],
+]
 
 # PyTorch stopped publishing Intel-macOS wheels after 2.2.2, so the resolver
 # lands there on its own -- no version cap is needed, and adding one would leak

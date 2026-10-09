@@ -7,17 +7,34 @@
 # A key this file does not recognise is an error, not a silent no-op.
 
 detector:
-  backend: community-forensics
+  # Three runtimes serve the same model with identical scores. They differ only
+  # in what must be installed and where inference happens:
+  #
+  #   community-forensics-onnx    onnxruntime, in-process   ~410 MB RSS   <- default
+  #   community-forensics-triton  nothing extra, remote     ~120 MB RSS
+  #   community-forensics         torch + timm, in-process  ~580-760 MB RSS
+  #
+  # The ONNX artifact is produced locally (upstream publishes safetensors):
+  #   uv run python -m ifs.detectors.backends.community_forensics.export \
+  #       --model commfor-384 --out-dir ./weights
+  backend: community-forensics-onnx
+  model: commfor-384          # resolves to <weights.dir>/onnx/<model>.onnx
+  # path: ./weights/onnx/my-export.onnx   # or name the file, with:
+  # variant: vit-s16-384
 
-  # Select the checkpoint by EITHER `model` (a name in the backend's catalog)
-  # OR `path` (a file on disk). Never both, never neither.
-  model: commfor-384
-  # revision: <sha>          # override the catalog's pinned revision
+  # --- remote inference on an existing Triton server ---
+  # backend: community-forensics-triton
+  # options:
+  #   url: http://triton:8000
+  #   model_name: commfor-384
+  #   variant: vit-s16-384      # preprocessing stays client-side
+  #   model_version: ""         # "" = whatever Triton serves as latest
 
-  # --- or load a checkpoint of your own ---
-  # path: ./weights/my-finetune.safetensors
-  # variant: vit-s16-384     # REQUIRED with `path`: a file does not state
-  #                          # which architecture it is. Mismatch = startup error.
+  # --- the torch runtime, for a checkpoint with no ONNX export yet ---
+  # backend: community-forensics
+  # model: commfor-384
+  # path: /weights/commfor-model-384/model.safetensors
+  # variant: vit-s16-384
 
   options: {}                # backend-specific extras, passed through verbatim
 

@@ -1,43 +1,150 @@
-# CPU:  docker compose up ifs-cpu
-# GPU:  docker compose --profile gpu up ifs-gpu   (needs nvidia-container-toolkit)
+# Runs the PUBLISHED image. Nothing is built unless you ask for it.
 #
-# ./weights is mounted in both so a checkpoint is fetched once and shared, and
-# so an air-gapped box can be handed a pre-populated directory.
+#   docker compose up ifs                       # ONNX runtime, CPU (lean default)
+#   docker compose --profile triton up ifs-triton   # remote inference on your Triton
+#   docker compose --profile gpu up ifs-gpu     # ONNX runtime, CUDA
+#   docker compose --profile torch up ifs-torch # torch runtime, CPU
+#   docker compose pull                         # refresh a moving tag
+#
+# Which tag:
+#   IFS_TAG=0.1.0 docker compose up ifs-cpu     # a pinned release  <- production
+#   IFS_TAG=main  docker compose up ifs-cpu     # the latest build of main
+#
+# `latest` is published only when a GitHub release is published; until the
+# first release exists, pass IFS_TAG explicitly. The GPU image is the same tag
+# with a `-gpu` suffix, which this file appends for you.
+#
+# To build locally instead of pulling:
+#   docker compose --profile build up ifs-cpu-build
+#   docker compose --profile build up ifs-gpu-build
+#
+# ./weights is mounted so a checkpoint is fetched once and shared, and so an
+# air-gapped box can be handed a pre-populated directory.
 #
 # ./config.yaml is REQUIRED: no config is baked into the image, and the service
 # refuses to start without one rather than defaulting to some model.
 # Copy config.example.yaml to config.yaml first.
+#
+# It mounts to /etc/ifs/config.yaml, not into /app -- /app holds the virtualenv,
+# and a directory mounted over it would shadow the interpreter.
+
+x-ifs-common: &ifs-common
+  ports: ["8000:8000"]
+  volumes:
+    - "./weights:/weights"
+    - "./config.yaml:/etc/ifs/config.yaml:ro"
+  restart: unless-stopped
+
+x-cpu-env: &cpu-env
+  IFS_RUNTIME__DEVICE: cpu
+  IFS_RUNTIME__DTYPE: float32
+  HF_HUB_CACHE: /weights/hub
+  # Unset on the host = open deployment. Generate: openssl rand -hex 32
+  IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+
+x-gpu-env: &gpu-env
+  IFS_RUNTIME__DEVICE: cuda
+  IFS_RUNTIME__DTYPE: float16
+  HF_HUB_CACHE: /weights/hub
+  IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+
+x-gpu-reservation: &gpu-reservation
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ['0']
+          capabilities: [gpu]
 
 services:
-  ifs-cpu:
-    build:
-      context: .
-      target: cpu
-    ports: ["8000:8000"]
-    volumes: ["./weights:/weights", "./config.yaml:/app/config.yaml:ro"]
-    environment:
-      IFS_RUNTIME__DEVICE: cpu
-      IFS_RUNTIME__DTYPE: float32
-      HF_HUB_CACHE: /weights/hub
-      # Unset on the host = open deployment. Generate: openssl rand -hex 32
-      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+  # ---------- published images (default) ----------
+  # The unsuffixed tag is the lean ONNX runtime. It also serves the
+  # `community-forensics-triton` backend, which needs nothing extra.
+  ifs:
+    <<: *ifs-common
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:${IFS_TAG:-latest}
+    pull_policy: ${IFS_PULL_POLICY:-missing}
+    environment: *cpu-env
 
   ifs-gpu:
+    <<: *ifs-common
     profiles: ["gpu"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:${IFS_TAG:-latest}-onnx-gpu
+    pull_policy: ${IFS_PULL_POLICY:-missing}
+    environment: *gpu-env
+    deploy: *gpu-reservation
+
+  # Remote inference. No GPU, no weights, no model runtime in this container --
+  # it preprocesses and speaks KServe v2 to a Triton you already run. Reserving
+  # a GPU here would occupy a device nothing in this container touches.
+  ifs-triton:
+    profiles: ["triton"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:${IFS_TAG:-latest}-triton
+    pull_policy: ${IFS_PULL_POLICY:-missing}
+    ports: ["8000:8000"]
+    volumes:
+      - "./config.yaml:/etc/ifs/config.yaml:ro"
+    restart: unless-stopped
+    environment:
+      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+    # Your Triton almost certainly lives in another compose project or on the
+    # host, so `http://triton:8000` will not resolve from this project's default
+    # network. Either join Triton's network (below) or point detector.options.url
+    # at a reachable address, e.g. http://host.docker.internal:8001 on Docker
+    # Desktop, or the host IP on Linux.
+    # networks: [default, triton]
+
+  ifs-torch:
+    <<: *ifs-common
+    profiles: ["torch"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:${IFS_TAG:-latest}-torch
+    pull_policy: ${IFS_PULL_POLICY:-missing}
+    environment: *cpu-env
+
+  ifs-torch-gpu:
+    <<: *ifs-common
+    profiles: ["torch"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:${IFS_TAG:-latest}-torch-gpu
+    pull_policy: ${IFS_PULL_POLICY:-missing}
+    environment: *gpu-env
+    deploy: *gpu-reservation
+
+  # ---------- local builds (opt in) ----------
+  # Same runtime config, built from this checkout instead of pulled. Tagged
+  # `:dev` so a local build never shadows a pulled release.
+  ifs-build:
+    <<: *ifs-common
+    profiles: ["build"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:dev
     build:
       context: .
-      target: gpu
+      target: onnx
+    environment: *cpu-env
+
+  ifs-triton-build:
+    profiles: ["build"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:dev-triton
+    build:
+      context: .
+      target: triton
     ports: ["8000:8000"]
-    volumes: ["./weights:/weights", "./config.yaml:/app/config.yaml:ro"]
+    volumes: ["./config.yaml:/etc/ifs/config.yaml:ro"]
     environment:
-      IFS_RUNTIME__DEVICE: cuda
-      IFS_RUNTIME__DTYPE: float16
-      HF_HUB_CACHE: /weights/hub
       IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
+
+  ifs-gpu-build:
+    <<: *ifs-common
+    profiles: ["build"]
+    image: ${IFS_IMAGE:-ghcr.io/rawthil/image-forensics-service}:dev-gpu
+    build:
+      context: .
+      target: onnx-gpu
+    environment: *gpu-env
+    deploy: *gpu-reservation
+
+# Uncomment together with `networks:` on ifs-triton to join an existing Triton
+# project's network, so `http://triton:8000` resolves.
+# networks:
+#   triton:
+#     external: true
+#     name: <the network your triton compose project created>

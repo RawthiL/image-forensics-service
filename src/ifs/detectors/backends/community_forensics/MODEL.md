@@ -19,6 +19,28 @@ The "thousands of generators" in the title is the *dataset* (2.7M images from
 Training: AdamW, lr 2e-5, weight decay 1e-2, batch 512, cosine schedule with 20%
 warmup, 52K iterations. Backbone trained end-to-end; frozen backbones did worse.
 
+## Runtimes
+
+Three backends serve this model with identical scores:
+
+| `detector.backend` | Needs | Inference |
+|---|---|---|
+| `community-forensics-onnx` | onnxruntime | in-process |
+| `community-forensics-triton` | nothing extra | remote Triton |
+| `community-forensics` | torch + timm | in-process |
+
+Upstream publishes safetensors only, so the ONNX artifact and the Triton model
+repository are produced locally:
+
+```bash
+uv run python -m ifs.detectors.backends.community_forensics.export \
+    --model commfor-384 --out-dir ./weights
+```
+
+The export checks itself against the torch checkpoint and refuses to write a
+model that disagrees by more than 1e-4. Measured agreement is 1.1e-6, against a
+service that rounds to 4 decimals.
+
 ## Options
 
 Pass via `IFS_DETECTOR_OPTIONS` (JSON):

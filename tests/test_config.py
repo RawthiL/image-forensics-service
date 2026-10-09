@@ -27,13 +27,26 @@ def _settings(tmp_path, monkeypatch, doc: dict, env: dict | None = None) -> Sett
 
 
 def test_model_and_path_together_is_an_error():
-    with pytest.raises(ValidationError, match="exactly one"):
+    with pytest.raises(ValidationError, match="at most one"):
         DetectorConfig(model="commfor-384", path="/w/x.safetensors")
 
 
-def test_neither_model_nor_path_is_an_error():
-    with pytest.raises(ValidationError, match="either `model`"):
-        DetectorConfig()
+def test_neither_model_nor_path_is_allowed_at_the_config_layer():
+    """Whether a local checkpoint is needed is the backend's business.
+
+    The Triton runtime names its model on the server and takes neither; the
+    backends that do need one raise their own error at startup.
+    """
+    cfg = DetectorConfig(backend="community-forensics-triton")
+    assert cfg.model is None and cfg.path is None
+
+
+def test_backends_that_need_a_checkpoint_still_say_so():
+    from ifs.detectors.backends.community_forensics.catalog import CatalogError
+    from ifs.detectors.registry import build
+
+    with pytest.raises(CatalogError, match=r"needs detector\.model or detector\.path"):
+        build("community-forensics-onnx")
 
 
 def test_path_without_variant_is_an_error():
@@ -59,6 +72,9 @@ def test_unknown_model_names_the_known_ones():
 
 
 def test_variant_contradicting_the_model_is_an_error():
+    # _select lives in the torch runtime's module; the ONNX runtime has its own
+    # equivalent, covered in test_runtimes.py.
+    pytest.importorskip("torch")
     from ifs.detectors.backends.community_forensics.catalog import CatalogError
     from ifs.detectors.backends.community_forensics.detector import _select
 
@@ -164,7 +180,7 @@ def test_local_config_yaml_is_valid_if_present(monkeypatch):
     monkeypatch.setenv("IFS_CONFIG_FILE", "config.yaml")
     s = Settings()
     assert s.detector.backend
-    assert bool(s.detector.model) ^ bool(s.detector.path)
+    assert not (s.detector.model and s.detector.path)
 
 
 def test_example_config_is_valid(monkeypatch):
@@ -173,8 +189,10 @@ def test_example_config_is_valid(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("IFS_CONFIG_FILE", "config.example.yaml")
     s = Settings()
-    assert s.detector.backend == "community-forensics"
-    assert bool(s.detector.model) ^ bool(s.detector.path)
+    # Any Community Forensics runtime is fine; the example may lead with the
+    # lean one. What must hold is that a checkpoint is named exactly one way.
+    assert s.detector.backend.startswith("community-forensics")
+    assert not (s.detector.model and s.detector.path)
 
 
 def test_example_config_ships_the_safe_defaults(monkeypatch):

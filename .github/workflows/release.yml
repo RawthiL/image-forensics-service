@@ -4,6 +4,14 @@
 #     ghcr.io/<owner>/<repo>:X.Y.Z, :X.Y, :latest          (CPU build)
 #     ghcr.io/<owner>/<repo>:X.Y.Z-gpu, :X.Y-gpu, :latest-gpu
 #   Pre-releases skip the :X.Y / :latest moving tags.
+#
+# Four images per release. The lean ONNX runtime is the unsuffixed default:
+#     :X.Y.Z            ONNX Runtime, CPU   (~589 MB)
+#     :X.Y.Z-onnx-gpu   ONNX Runtime, CUDA
+#     :X.Y.Z-triton     Triton client, no local runtime  (~489 MB)
+#     :X.Y.Z-torch      torch, CPU          (~1.7 GB)
+#     :X.Y.Z-torch-gpu  torch, CUDA         (~9.2 GB)
+# Use the -triton image when inference runs on a Triton server you operate.
 # - Manual run (Actions tab -> "Release image" -> Run workflow): test, then push
 #     :<branch> and :sha-<short> (plus -gpu) for trying an unreleased build.
 #
@@ -53,7 +61,17 @@ jobs:
         run: uv lock --check
 
       - name: Install
-        run: uv sync --locked --extra cpu --extra community-forensics --extra dev
+        run: >
+          uv sync --locked --extra cpu --extra community-forensics
+          --extra onnx-cpu --extra onnx-export --extra dev
+
+      - name: Export the ONNX artifact
+        # Produces weights/onnx/*.onnx so the runtime-parity tests run for real
+        # rather than skipping. The export verifies itself against the torch
+        # checkpoint and fails if they disagree.
+        run: >
+          uv run python -m ifs.detectors.backends.community_forensics.export
+          --model commfor-384 --out-dir ./weights
 
       - name: Lint
         run: uv run ruff check src tests
@@ -93,10 +111,19 @@ jobs:
       fail-fast: false      # a CUDA build failure must not bury a good CPU image
       matrix:
         include:
+          # The lean ONNX runtime is the unsuffixed default: same scores as
+          # torch, ~589 MB against 1.7 GB / 9.2 GB.
+          - target: onnx
+            flavor: ""
+          - target: onnx-gpu
+            flavor: "suffix=-onnx-gpu,onlatest=true"
+          # Remote inference on an existing Triton: no model runtime at all.
+          - target: triton
+            flavor: "suffix=-triton,onlatest=true"
           - target: cpu
-            flavor: ""                          # the unsuffixed default
+            flavor: "suffix=-torch,onlatest=true"
           - target: gpu
-            flavor: "suffix=-gpu,onlatest=true"  # :X.Y.Z-gpu, :latest-gpu
+            flavor: "suffix=-torch-gpu,onlatest=true"
     steps:
       - uses: actions/checkout@v7
 
@@ -104,7 +131,7 @@ jobs:
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Free disk space
-        if: matrix.target == 'gpu'
+        if: matrix.target == 'gpu' || matrix.target == 'onnx-gpu'
         # CUDA wheels are ~2.5GB unpacked and the runner ships ~25GB of
         # preinstalled toolchains we never use.
         run: |
@@ -153,9 +180,10 @@ jobs:
         # Starts with the stub backend so no weights are fetched: this proves
         # the image boots, reads a config and serves, not that a model works.
         run: |
-          printf 'detector:\n  backend: stub\n  model: stub-v1\n' > /tmp/ci-config.yaml
+          mkdir -p /tmp/ci-config
+          printf 'detector:\n  backend: stub\n  model: stub-v1\n' > /tmp/ci-config/config.yaml
           docker run -d --name ifs-smoke -p 8000:8000 \
-            -v /tmp/ci-config.yaml:/app/config.yaml:ro \
+            -v /tmp/ci-config:/etc/ifs:ro \
             "${IMAGE}@${{ steps.build.outputs.digest }}"
           for _ in $(seq 1 30); do
             if curl -fsS http://localhost:8000/readyz; then ok=1; break; fi

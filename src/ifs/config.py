@@ -55,17 +55,23 @@ class DetectorConfig(_Section):
     options: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _exactly_one_source(self) -> DetectorConfig:
+    def _coherent_source(self) -> DetectorConfig:
+        """Only the rules that hold for every backend.
+
+        Whether a checkpoint is needed *at all* is the backend's business: a
+        remote runtime (Triton) names its model on the server and takes neither
+        `model` nor `path`, while the stub takes nothing. Each backend raises
+        its own clear error at startup, so demanding a local checkpoint here
+        would reject valid configurations.
+        """
         if self.model and self.path:
             raise ValueError(
-                "detector: set exactly one of `model` or `path`, not both "
+                "detector: set at most one of `model` or `path`, not both "
                 f"(model={self.model!r}, path={self.path!r}). Note that an "
                 "IFS_DETECTOR__* variable merges into the config file's detector "
                 "section rather than replacing it, so setting IFS_DETECTOR__MODEL "
                 "while the file sets `path` produces both."
             )
-        if not self.model and not self.path:
-            raise ValueError("detector: set either `model` (catalog name) or `path` (checkpoint)")
         if self.path and not self.variant:
             raise ValueError(
                 "detector: `path` requires `variant` -- a checkpoint file does not state "
@@ -213,6 +219,30 @@ class Settings(BaseSettings):
     ):
         # Precedence: constructor > environment > config.yaml > defaults.
         return (init_settings, env_settings, _YamlSource(settings_cls), file_secret_settings)
+
+    @model_validator(mode="after")
+    def _warn_on_inert_sections(self) -> Settings:
+        """Say so when a section cannot affect the chosen backend.
+
+        A remote runtime does no local inference, so `weights` and `runtime`
+        are dead config there. Silently ignoring them makes a misconfiguration
+        look like it was applied.
+        """
+        if self.detector.backend.endswith("-triton"):
+            inert = []
+            if self.weights.dir is not None or self.weights.source != "auto":
+                inert.append("weights")
+            if self.runtime.device != "auto" or self.runtime.dtype != "auto":
+                inert.append("runtime")
+            if inert:
+                log.warning(
+                    "backend %r runs inference on a remote Triton server, so the "
+                    "%s section(s) have no effect here -- device, dtype and weights "
+                    "are decided by Triton.",
+                    self.detector.backend,
+                    " and ".join(inert),
+                )
+        return self
 
     @model_validator(mode="after")
     def _warn_on_ignored_weights(self) -> Settings:
