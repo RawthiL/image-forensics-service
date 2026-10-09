@@ -43,7 +43,10 @@ triton = ["numpy>=1.26"]
 
 # Export tooling: turns a safetensors checkpoint into the ONNX artifact and a
 # Triton model repository. Needs torch too, via the `community-forensics` extra.
-onnx-export = ["onnx>=1.16", "onnxruntime>=1.18"]
+# onnxscript is required by torch >= 2.9's dynamo-based exporter, which is the
+# default there; torch 2.2 (the newest Intel-macOS build) uses the old
+# TorchScript path and does not need it. Both are supported.
+onnx-export = ["onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.1"]
 
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.7"]
 
