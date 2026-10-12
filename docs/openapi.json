@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Image Forensics Service",
-    "description": "\nAI-generated image detection.\n\n**`POST /v1/detect` is this service's API.** It is the surface this project\nspecifies, documents and versions, and the one to write new integrations\nagainst. It is the only route without vendor baggage, and the only one that\nreturns the model and pipeline fingerprints a caller needs to reason about\nreproducibility.\n\n**The vendor routes are compatibility layers.** They exist so an application\nalready written against a commercial detection API can point at this service by\nchanging its base URL and nothing else. They reshape the same inference result\ninto someone else's envelope, and they inherit that envelope's limits:\n\n* `POST|GET /1.0/check.json` -- [Sightengine][se]-shaped. The better-supported of the two.\n* `POST /api/v2/task/sync` -- [Hive][hive]-shaped. Its per-generator head is approximated.\n\n[se]: https://sightengine.com/docs/ai-generated-image-detection\n[hive]: https://docs.thehive.ai/docs/ai-image-and-video-detection\n\nVendor API keys on the compatibility routes are accepted and ignored: swapping\nthe base URL is all a client should have to do.\n\nNeither vendor publishes an OpenAPI specification. This one is authoritative for\nthis service only; the compatibility routes are documented here as a convenience\nand are described normatively by `docs/API_COMPAT.md`.\n",
+    "description": "\nThree image-forensics services in one deployment. Each is mounted, keyed and\nstaked independently, and they differ in what an operator must supply:\n\n**`POST /v1/detect` \u2014 AI-generated image detection.** Needs a model. Which one,\nhow it is loaded and how its score is composed is this project's own subject:\nbackends are folders under `detectors/backends/`, served in-process or by\nTriton, and the response carries the model and pipeline fingerprints a caller\nneeds to reason about reproducibility. Two vendor-shaped compatibility layers\nride along with it.\n\n**`POST /v1/screen` \u2014 container screening.** Needs nothing at all. It reads the\nfile but never the picture: metadata text, smuggled Unicode, and bytes past the\nend of the image data. No model, no sibling service, no GPU.\n\n**`POST /v1/inspect` \u2014 prompt-injection inspection.** Needs two sibling\nservices over HTTP: an OCR service for the text boxes and their contents, and a\nprompt-injection classifier for the verdict. It loads no model of its own. It\nrenders the views a victim's preprocessing would produce, so it can see text\nthat exists only after a downscale \u2014 and runs the container checks too.\n\n**The vendor routes are compatibility layers** on the detection service. They\nexist so an application already written against a commercial detection API can\npoint at this service by changing its base URL and nothing else. They reshape\nthe same inference result into someone else's envelope, and they inherit that\nenvelope's limits:\n\n* `POST|GET /1.0/check.json` -- [Sightengine][se]-shaped. The better-supported of the two.\n* `POST /api/v2/task/sync` -- [Hive][hive]-shaped. Its per-generator head is approximated.\n\n[se]: https://sightengine.com/docs/ai-generated-image-detection\n[hive]: https://docs.thehive.ai/docs/ai-image-and-video-detection\n\nVendor API keys on the compatibility routes are accepted and ignored: swapping\nthe base URL is all a client should have to do.\n\nNeither vendor publishes an OpenAPI specification. This one is authoritative for\nthis service only; the compatibility routes are documented here as a convenience\nand are described normatively by `docs/API_COMPAT.md`.\n",
     "version": "0.1.0"
   },
   "paths": {
@@ -34,7 +34,8 @@
         "tags": [
           "ops"
         ],
-        "summary": "Readiness probe (model loaded)",
+        "summary": "Readiness probe (every served endpoint is up)",
+        "description": "One line per endpoint this deployment serves.\n\nA screening-only deployment has no model to wait for and is ready as soon\nas it is listening, which is most of the point of serving it alone.",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
@@ -57,7 +58,7 @@
         "tags": [
           "ops"
         ],
-        "summary": "Active backend and what else is installed",
+        "summary": "What this deployment serves, and with what",
         "operationId": "models_v1_models_get",
         "responses": {
           "200": {
@@ -351,10 +352,178 @@
           }
         ]
       }
+    },
+    "/v1/screen": {
+      "post": {
+        "tags": [
+          "screening"
+        ],
+        "summary": "Screen the image container (no model, no upstream)",
+        "operationId": "screen_v1_screen_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_screen_v1_screen_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/inspect": {
+      "post": {
+        "tags": [
+          "inspection"
+        ],
+        "summary": "Inspect an image for an embedded prompt injection",
+        "operationId": "inspect_v1_inspect_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_inspect_v1_inspect_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid service credentials"
+          }
+        },
+        "security": [
+          {
+            "ServiceApiKey": []
+          },
+          {
+            "ServiceBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AnalysisResponse": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "description": "How much of the file was examined. `container` means the pixels were never looked at, so a `clean` is the far weaker statement."
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "clean | suspicious | malicious"
+          },
+          "injection": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Injection",
+            "description": "Highest finding score"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "description": "Highest finding severity"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/FindingOut"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "upstreams": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UpstreamOut"
+            },
+            "type": "object",
+            "title": "Upstreams",
+            "description": "Which composed services actually ran. A check that was skipped or unreachable says so here rather than being silently absent. Empty at container scope, which composes nothing."
+          },
+          "views_rendered": {
+            "type": "integer",
+            "title": "Views Rendered"
+          },
+          "pipeline_fingerprint": {
+            "type": "string",
+            "title": "Pipeline Fingerprint",
+            "description": "Everything that decides the answer at this scope"
+          },
+          "elapsed_ms": {
+            "type": "number",
+            "title": "Elapsed Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "verdict",
+          "injection",
+          "severity",
+          "findings",
+          "views_rendered",
+          "pipeline_fingerprint",
+          "elapsed_ms"
+        ],
+        "title": "AnalysisResponse"
+      },
       "Body_check_post_1_0_check_json_post": {
         "properties": {
           "media": {
@@ -454,6 +623,92 @@
         "type": "object",
         "title": "Body_detect_v1_detect_post"
       },
+      "Body_inspect_v1_inspect_post": {
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media",
+            "description": "Image file upload"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL of an image to fetch"
+          },
+          "media_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Base64",
+            "description": "Base64 image, data: URL accepted"
+          }
+        },
+        "type": "object",
+        "title": "Body_inspect_v1_inspect_post"
+      },
+      "Body_screen_v1_screen_post": {
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media",
+            "description": "Image file upload"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "URL of an image to fetch"
+          },
+          "media_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Base64",
+            "description": "Base64 image, data: URL accepted"
+          }
+        },
+        "type": "object",
+        "title": "Body_screen_v1_screen_post"
+      },
       "Body_task_sync_api_v2_task_sync_post": {
         "properties": {
           "media": {
@@ -540,6 +795,62 @@
           "elapsed_ms"
         ],
         "title": "DetectResponse"
+      },
+      "FindingOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "`scaling_attack`, `unicode_tag_block`, ..."
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "description": "none | low | medium | high"
+          },
+          "score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score"
+          },
+          "where": {
+            "type": "string",
+            "title": "Where",
+            "description": "`exif:UserComment`, `view:rescale:384:bicubic`, ..."
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt",
+            "description": "Present only when that endpoint's `include_text` is enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "severity",
+          "score",
+          "where"
+        ],
+        "title": "FindingOut"
       },
       "HTTPValidationError": {
         "properties": {
@@ -802,6 +1113,42 @@
         ],
         "title": "TypeBlock"
       },
+      "UpstreamOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "ok | disabled | skipped | unreachable"
+          },
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "UpstreamOut"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -848,7 +1195,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Single shared key gating the deployment. Set server-side via IFS_API_KEY; when unset, every route is open. This is a deployment boundary, not user authentication -- it carries no caller identity. Distinct from the vendor keys on the compatibility routes, which are accepted and ignored."
+        "description": "Key gating one endpoint. This is a deployment boundary, not user authentication -- it carries no caller identity. Distinct from the vendor keys on the compatibility routes, which are accepted and ignored.\n\nKeys are listed per endpoint under `endpoints.<name>.api_keys`, and a key opens only the endpoints that list it. An empty list leaves that endpoint open. `/v1/models` accepts any served endpoint's key and answers with the sections that key is entitled to."
       },
       "ServiceBearer": {
         "type": "http",
@@ -860,19 +1207,27 @@
   "tags": [
     {
       "name": "detection",
-      "description": "**Primary API.** Write new integrations against this."
+      "description": "**AI-generated image detection.** Needs a model."
+    },
+    {
+      "name": "screening",
+      "description": "**Container screening.** Reads the file, never the picture. Needs no model and no sibling service."
+    },
+    {
+      "name": "inspection",
+      "description": "**Prompt-injection inspection.** Needs an OCR service and a prompt-injection classifier; loads no model of its own."
     },
     {
       "name": "ops",
-      "description": "Health, readiness, and the active backend."
+      "description": "Health, readiness, and what this deployment serves."
     },
     {
       "name": "compat: sightengine",
-      "description": "Compatibility layer. Mimics `api.sightengine.com/1.0/check.json?models=genai`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
+      "description": "Compatibility layer on the detection service. Mimics `api.sightengine.com/1.0/check.json?models=genai`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
     },
     {
       "name": "compat: hive",
-      "description": "Compatibility layer. Mimics `api.thehive.ai/api/v2/task/sync`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
+      "description": "Compatibility layer on the detection service. Mimics `api.thehive.ai/api/v2/task/sync`. Not a specification of this service -- see `docs/API_COMPAT.md` for fidelity."
     }
   ]
 }

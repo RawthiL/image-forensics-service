@@ -250,7 +250,8 @@ def test_spec_generation_is_independent_of_local_config(tmp_path, monkeypatch):
     narrow = tmp_path / "config.yaml"
     narrow.write_text(
         "detector:\n  backend: stub\n  model: s\n"
-        "api:\n  enable_hive_dialect: false\n  enable_sightengine_dialect: false\n"
+        "endpoints:\n  detect:\n    compat:\n"
+        "      hive: false\n      sightengine: false\n"
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith("IFS_")}
     env["IFS_CONFIG_FILE"] = str(narrow)
@@ -261,3 +262,26 @@ def test_spec_generation_is_independent_of_local_config(tmp_path, monkeypatch):
         [sys.executable, "scripts/export_openapi.py"], env=env, check=True, capture_output=True
     )
     assert spec.read_text() == before, "spec changed when generated under a narrower config"
+
+
+def test_api_keys_accept_both_env_forms(tmp_path, monkeypatch):
+    """A compose file writes `k1,k2`; the pydantic-settings idiom is JSON.
+
+    Both must work, and an unset variable must mean *no keys* rather than one
+    key that is the empty string.
+    """
+    config = tmp_path / "config.yaml"
+    config.write_text("detector:\n  backend: stub\n  model: s\n")
+    monkeypatch.setenv("IFS_CONFIG_FILE", str(config))
+    from ifs.config import Settings, reset_settings
+
+    cases = {"k1, k2": ["k1", "k2"], '["j1","j2"]': ["j1", "j2"], "": [], "solo": ["solo"]}
+    for raw, expected in cases.items():
+        reset_settings()
+        monkeypatch.setenv("IFS_ENDPOINTS__DETECT__API_KEYS", raw)
+        assert Settings().endpoints.detect.api_keys == expected
+
+    reset_settings()
+    monkeypatch.setenv("IFS_ENDPOINTS__DETECT__API_KEYS", "[unclosed")
+    with pytest.raises(ValidationError):
+        Settings()

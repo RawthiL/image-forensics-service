@@ -39,14 +39,15 @@ x-cpu-env: &cpu-env
   IFS_RUNTIME__DEVICE: cpu
   IFS_RUNTIME__DTYPE: float32
   HF_HUB_CACHE: /weights/hub
-  # Unset on the host = open deployment. Generate: openssl rand -hex 32
-  IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+  # Keys for the detection endpoint, comma-separated. Unset on the host =
+  # open deployment. Generate: openssl rand -hex 32
+  IFS_ENDPOINTS__DETECT__API_KEYS: ${IFS_API_KEY:-}
 
 x-gpu-env: &gpu-env
   IFS_RUNTIME__DEVICE: cuda
   IFS_RUNTIME__DTYPE: float16
   HF_HUB_CACHE: /weights/hub
-  IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+  IFS_ENDPOINTS__DETECT__API_KEYS: ${IFS_API_KEY:-}
 
 x-gpu-reservation: &gpu-reservation
   resources:
@@ -86,7 +87,7 @@ services:
       - "./config.yaml:/etc/ifs/config.yaml:ro"
     restart: unless-stopped
     environment:
-      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+      IFS_ENDPOINTS__DETECT__API_KEYS: ${IFS_API_KEY:-}
     # Your Triton almost certainly lives in another compose project or on the
     # host, so `http://triton:8000` will not resolve from this project's default
     # network. Either join Triton's network (below) or point detector.options.url
@@ -130,7 +131,7 @@ services:
     ports: ["8000:8000"]
     volumes: ["./config.yaml:/etc/ifs/config.yaml:ro"]
     environment:
-      IFS_AUTH__API_KEY: ${IFS_API_KEY:-}
+      IFS_ENDPOINTS__DETECT__API_KEYS: ${IFS_API_KEY:-}
 
   ifs-gpu-build:
     <<: *ifs-common

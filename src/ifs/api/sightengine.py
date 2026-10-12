@@ -65,8 +65,8 @@ async def check_post(
     api_user: str | None = Form(None),    # accepted, ignored
     api_secret: str | None = Form(None),  # accepted, ignored
 ) -> SightengineResponse:
-    image = await load_one(settings=settings, upload=media, url=url)
-    return await _check(service, settings, image=image, uri=url)
+    loaded = await load_one(settings=settings, upload=media, url=url)
+    return await _check(service, settings, image=loaded.image, uri=url)
 
 
 @router.get(
@@ -82,5 +82,5 @@ async def check_get(
     api_user: str | None = Query(None),    # accepted, ignored
     api_secret: str | None = Query(None),  # accepted, ignored
 ) -> SightengineResponse:
-    image = await load_one(settings=settings, url=url)
-    return await _check(service, settings, image=image, uri=url)
+    loaded = await load_one(settings=settings, url=url)
+    return await _check(service, settings, image=loaded.image, uri=url)

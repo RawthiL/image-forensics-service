@@ -11,6 +11,7 @@ import base64
 import binascii
 import io
 import logging
+from dataclasses import dataclass
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -25,6 +26,29 @@ log = logging.getLogger(__name__)
 Image.MAX_IMAGE_PIXELS = None
 
 
+@dataclass(frozen=True)
+class LoadedMedia:
+    """A decoded image, and optionally the bytes it was decoded from.
+
+    `/v1/inspect` needs the original container: EXIF, XMP, the JPEG COM
+    marker and any trailing polyglot data are all gone once Pillow has handed
+    back pixels. `/v1/detect` does not, and a 15 MiB buffer held for the life
+    of every in-flight detection request would show up in this service's
+    resident set, which is a number the project measures. So the bytes are
+    kept only when a route asks for them.
+    """
+
+    image: Image.Image
+    raw: bytes | None = None
+    format: str | None = None
+
+    @property
+    def container(self) -> bytes:
+        if self.raw is None:
+            raise RuntimeError("this media was loaded without keep_raw")
+        return self.raw
+
+
 class MediaError(ValueError):
     """Bad input from the caller. The API layer maps this to a 4xx."""
 
@@ -33,7 +57,7 @@ class MediaError(ValueError):
         self.code = code
 
 
-async def from_url(url: str, settings: Settings) -> Image.Image:
+async def from_url(url: str, settings: Settings, *, keep_raw: bool = False) -> LoadedMedia:
     """Fetch an image by URL, refusing anything that is not publicly routable.
 
     Redirects are followed manually so every hop is validated. httpx's own
@@ -83,10 +107,10 @@ async def from_url(url: str, settings: Settings) -> Image.Image:
         else:
             raise MediaError("too many redirects", code="url_fetch_failed")
 
-    return decode(bytes(raw), settings)
+    return decode(bytes(raw), settings, keep_raw=keep_raw)
 
 
-def from_base64(payload: str, settings: Settings) -> Image.Image:
+def from_base64(payload: str, settings: Settings, *, keep_raw: bool = False) -> LoadedMedia:
     # Tolerate data: URLs, which browsers produce and callers paste.
     if payload.startswith("data:"):
         _, _, payload = payload.partition(",")
@@ -94,10 +118,10 @@ def from_base64(payload: str, settings: Settings) -> Image.Image:
         raw = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise MediaError("media_base64 is not valid base64", code="invalid_base64") from exc
-    return decode(raw, settings)
+    return decode(raw, settings, keep_raw=keep_raw)
 
 
-def decode(raw: bytes, settings: Settings) -> Image.Image:
+def decode(raw: bytes, settings: Settings, *, keep_raw: bool = False) -> LoadedMedia:
     if not raw:
         raise MediaError("empty image payload", code="empty_media")
     if len(raw) > settings.limits.max_image_bytes:
@@ -120,4 +144,4 @@ def decode(raw: bytes, settings: Settings) -> Image.Image:
     except OSError as exc:
         raise MediaError(f"could not decode image: {exc}", code="invalid_media") from exc
 
-    return img
+    return LoadedMedia(image=img, raw=raw if keep_raw else None, format=img.format)

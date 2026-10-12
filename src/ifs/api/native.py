@@ -34,8 +34,8 @@ async def detect(
     url: str | None = Form(None, description="URL of an image to fetch"),
     media_base64: str | None = Form(None, description="Base64 image, data: URL accepted"),
 ) -> DetectResponse:
-    image = await load_one(settings=settings, upload=media, url=url, b64=media_base64)
-    scored = await service.score(image)
+    loaded = await load_one(settings=settings, upload=media, url=url, b64=media_base64)
+    scored = await service.score(loaded.image)
     return DetectResponse(
         ai_generated=scored.result.ai_generated,
         deepfake=scored.result.deepfake,

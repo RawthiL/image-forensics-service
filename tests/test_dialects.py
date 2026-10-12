@@ -55,5 +55,8 @@ def test_missing_media_is_a_400(client):
 
 def test_models_endpoint_reports_backend(client):
     body = client.get("/v1/models").json()
-    assert body["active"]["name"] == "stub"
-    assert "stub" in body["available"]
+    assert body["endpoints"] == ["detect"]
+    assert body["detect"]["active"]["name"] == "stub"
+    assert "stub" in body["detect"]["available"]
+    # Not served here, so not described.
+    assert "screen" not in body and "inspect" not in body

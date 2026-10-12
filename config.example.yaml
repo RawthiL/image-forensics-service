@@ -1,11 +1,126 @@
 # Image Forensics Service -- authoritative configuration.
 #
 # Environment variables override individual keys, nested with a double
-# underscore:  IFS_DETECTOR__MODEL=commfor-224, IFS_AUTH__API_KEY=...
+# underscore:  IFS_DETECTOR__MODEL=commfor-224,
+#              IFS_ENDPOINTS__INSPECT__OCR__URL=http://image-inference:8000
 # Point at a different file with IFS_CONFIG_FILE=/path/to/config.yaml.
 #
 # A key this file does not recognise is an error, not a silent no-op.
 
+# ---------------------------------------------------------------------------
+# The services this deployment serves.
+#
+# Three endpoints, mounted, keyed and staked independently. Anything not
+# enabled is not mounted and answers 404 -- absent, not forbidden. They differ
+# in what the operator must supply:
+#
+#   detect   an AI-generation model (see `detector` below)
+#   screen   nothing at all
+#   inspect  an OCR service and a prompt-injection classifier, over HTTP
+#
+# Each endpoint has its own API keys. A key opens only the endpoints that list
+# it, so a supplier staked for screening cannot be handed a credential that
+# also opens detection. Repeat a key, or use a YAML anchor, to share one.
+# An EMPTY list leaves that endpoint open -- per endpoint, not per deployment.
+# ---------------------------------------------------------------------------
+endpoints:
+
+  # --- AI-generated image detection: POST /v1/detect ---------------------
+  # The one endpoint that needs a model. What model, and how it is loaded and
+  # scored, is the `detector` / `weights` / `runtime` / `scoring` sections.
+  detect:
+    enabled: true
+    api_keys: []
+      # - "change-me-detect-client-a"
+    # Vendor-shaped routes carrying the same result. They are the detection
+    # service in someone else's envelope, so they take its keys.
+    compat:
+      sightengine: true        # POST|GET /1.0/check.json
+      hive: true               # POST /api/v2/task/sync
+
+  # --- Container screening: POST /v1/screen -------------------------------
+  # Reads the file, never the picture: metadata text, smuggled Unicode, and
+  # bytes past the end of the image data. No model, no sibling service, no
+  # GPU -- a supplier can serve this from a small box.
+  #
+  # It does NOT look at the pixels. An image with instructions painted across
+  # it comes back clean here; that is what /v1/inspect is for.
+  screen:
+    enabled: false
+    api_keys: []
+    flag_threshold: 0.5
+    score_decimals: 4
+    include_text: false        # quote offending text in findings; see below
+
+  # --- Prompt-injection inspection: POST /v1/inspect ----------------------
+  # Renders the views a victim's preprocessing would produce, asks the OCR
+  # service for the text boxes and their contents, and asks the classifier
+  # whether what it found is an injection. Runs the container checks too.
+  # Loads no model of its own.
+  inspect:
+    enabled: false
+    api_keys: []
+    flag_threshold: 0.5
+    score_decimals: 4
+    # Quote the offending text in findings. Off by default: two suppliers
+    # running different OCR builds return different strings for the same
+    # image, so excerpts are the least reproducible part of a report. Useful
+    # for a human triaging a hit; noise in anything comparing answers across
+    # suppliers.
+    include_text: false
+
+    # What this service looks at. Forensic policy, and part of the pipeline
+    # fingerprint -- it decides what can and cannot be seen.
+    views:
+      # Transformations that reveal text a human cannot see at native size.
+      # A pass that cannot apply (no alpha channel, full contrast already) is
+      # skipped rather than producing a copy of the native view.
+      normalize: [alpha_black, alpha_white, contrast_stretch, lsb]
+      # The downscales to replay. These are the shapes a victim's
+      # preprocessing produces, and an image-scaling attack is built against a
+      # specific pair -- what is not listed here is not looked for. Sizes at
+      # or above the image's long edge are skipped: these attacks need a
+      # *down*scale.
+      rescale:
+        sizes:   [224, 336, 384, 512, 768]
+        filters: [bicubic, bilinear, area]   # nearest, lanczos also available
+      max_views: 32            # ceiling, so a long list cannot fan out to hundreds of calls
+
+    # When text *boxes* alone are evidence -- the views where boxes were found
+    # but recognition read nothing. A downscale legitimately finds LESS text
+    # than the native frame, never more, so the reverse is the signature.
+    regions:
+      min_regions: 1           # boxes a derived view needs before disagreeing counts
+      min_area_fraction: 0.0005  # ...and how much of the frame they must cover
+
+    # image-inference-server, Google Cloud Vision images:annotate.
+    # Operator configuration, never caller-supplied, which is why these URLs
+    # sit outside the SSRF guard that governs limits.allow_url_fetch.
+    ocr:
+      url: null                # e.g. http://image-inference:8000 -- base URL, no path
+      api_key: null            # sent as x-goog-api-key
+      timeout_s: 10.0
+      batch: 8                 # views per request; the upstream caps this too
+      max_request_bytes: 12582912
+      min_region_score: 0.6    # detector score floor for text regions
+      # On failure: refuse with 502 rather than answer. On by default, because
+      # a report that silently skipped a check reads exactly like a clean one.
+      required: true
+
+    # language-forensics-service, its native /v1/detect.
+    classifier:
+      url: null                # e.g. http://language-forensics:8000 -- base URL, no path
+      api_key: null            # sent as x-api-key
+      timeout_s: 5.0
+      threshold: null          # override the classifier's own flagging threshold
+      max_text_chars: 20000
+      skip_when_no_text: true  # most images carry no text; then no call is made
+      required: true
+
+# ---------------------------------------------------------------------------
+# The model stack. Read only by endpoints.detect; omit it entirely on a
+# deployment that serves only `screen`.
+# ---------------------------------------------------------------------------
 detector:
   # Three runtimes serve the same model with identical scores. They differ only
   # in what must be installed and where inference happens:
@@ -62,14 +177,16 @@ scoring:
   crop_size_fallback: 384    # used when a backend declares no native input size
   score_decimals: 4
 
+# ---------------------------------------------------------------------------
+# Shared by every endpoint.
+# ---------------------------------------------------------------------------
 server:
   host: 0.0.0.0
   port: 8000
 
 auth:
-  # Single shared key gating the deployment ("only our relay miner may reach
-  # this container"). Not user auth. null = every route open.
-  api_key: null
+  # Only the header name is global; the keys live on each endpoint above.
+  # Credentials arrive as this header or as `Authorization: Bearer <key>`.
   api_key_header: X-API-Key
 
 limits:
@@ -84,7 +201,3 @@ limits:
   # Development only: disables the SSRF guard that rejects loopback, RFC1918,
   # link-local and cloud-metadata addresses on every redirect hop.
   allow_private_urls: false
-
-api:
-  enable_sightengine_dialect: true
-  enable_hive_dialect: true

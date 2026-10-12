@@ -11,8 +11,11 @@ operator's `config.yaml`. Two reasons:
   renameable). Generating from a local file would let someone's private
   settings silently drop documented routes from the published spec.
 
-The canonical config enables everything and uses the `stub` backend, so no
-weights are fetched and the result describes the full surface.
+The canonical config enables every endpoint and both compatibility layers,
+and uses the `stub` backend, so no weights are fetched and the result
+describes the full surface. Inspection's upstreams are left unconfigured:
+mounting the route is what shapes the spec, and no service is contacted at
+export time.
 """
 
 import json
@@ -30,9 +33,16 @@ detector:
   model: stub-v1
 auth:
   api_key_header: X-API-Key
-api:
-  enable_sightengine_dialect: true
-  enable_hive_dialect: true
+endpoints:
+  detect:
+    enabled: true
+    compat:
+      sightengine: true
+      hive: true
+  screen:
+    enabled: true
+  inspect:
+    enabled: true
 """
 
 

@@ -28,8 +28,8 @@ async def task_sync(
     url: str | None = Form(None),
     authorization: str | None = Header(None),  # accepted, ignored
 ) -> HiveTaskResponse:
-    image = await load_one(settings=settings, upload=media, url=url)
-    scored = await service.score(image)
+    loaded = await load_one(settings=settings, upload=media, url=url)
+    scored = await service.score(loaded.image)
     return HiveTaskResponse.build(
         task_id=secrets.token_hex(16),
         ai_generated=scored.result.ai_generated,

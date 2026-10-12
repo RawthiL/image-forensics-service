@@ -13,14 +13,22 @@ Env override uses a double underscore for nesting:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from .media import views as view_types
 
 log = logging.getLogger(__name__)
 
@@ -113,8 +121,19 @@ class ServerConfig(_Section):
     port: int = 8000
 
 
+#: The services this deployment can serve. Each is mounted, keyed and staked
+#: independently, and they differ in what they *need*:
+#:
+#:   detect   an AI-generation model, loaded in-process or served by Triton
+#:   screen   nothing at all
+#:   inspect  an OCR service and a prompt-injection classifier, over HTTP
+Endpoint = Literal["detect", "screen", "inspect"]
+ENDPOINTS: tuple[Endpoint, ...] = ("detect", "screen", "inspect")
+
+
 class AuthConfig(_Section):
-    api_key: str | None = None
+    """Only the header name is global. The keys live on each endpoint."""
+
     api_key_header: str = "X-API-Key"
 
 
@@ -142,9 +161,248 @@ class LimitsConfig(_Section):
     """
 
 
-class ApiConfig(_Section):
-    enable_sightengine_dialect: bool = True
-    enable_hive_dialect: bool = True
+class RescaleConfig(_Section):
+    """The downscales to replay.
+
+    These are the shapes a victim's preprocessing produces. An attack is built
+    against a specific size and resampler, so what is not listed here is not
+    looked for.
+    """
+
+    sizes: list[int] = Field(default_factory=lambda: [224, 336, 384, 512, 768])
+    filters: list[view_types.Resample] = Field(
+        default_factory=lambda: ["bicubic", "bilinear", "area"]
+    )
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> RescaleConfig:
+        if not self.sizes or not self.filters:
+            raise ValueError(
+                "inspect.views.rescale: `sizes` and `filters` must both be non-empty; "
+                "to disable rescaling, set one of them to [] is not supported -- "
+                "remove sizes you do not want instead"
+            )
+        if any(s < 16 for s in self.sizes):
+            raise ValueError("inspect.views.rescale.sizes: every size must be at least 16")
+        return self
+
+
+class ViewsConfig(_Section):
+    """What this service looks at. Forensic policy, and part of the fingerprint."""
+
+    normalize: list[view_types.Normalize] = Field(
+        default_factory=lambda: ["alpha_black", "alpha_white", "contrast_stretch", "lsb"]
+    )
+    rescale: RescaleConfig = Field(default_factory=RescaleConfig)
+    max_views: int = 32
+    """Hard ceiling, so a long `sizes` list cannot turn one image into hundreds
+    of OCR calls. Views past it are dropped, with a warning."""
+
+
+class _UpstreamConfig(_Section):
+    """A service this one composes.
+
+    `url` absent means the hop is not configured and is reported as `disabled`
+    -- `required` then has nothing to govern. These URLs are operator
+    configuration and are never caller-supplied, which is why they are exempt
+    from the SSRF guard that `limits.allow_url_fetch` turns on.
+    """
+
+    url: str | None = None
+    api_key: str | None = None
+    timeout_s: float = 10.0
+    required: bool = True
+    """On failure: raise (502) rather than answer. Default on, because a report
+    that silently skipped a check reads exactly like a clean one."""
+
+
+class OcrUpstreamConfig(_UpstreamConfig):
+    """`image-inference-server`, speaking Google Cloud Vision's images:annotate."""
+
+    batch: int = 8
+    """Views per request. The upstream caps this too (`max_images_per_request`);
+    set 1 if it is configured without batching."""
+
+    max_request_bytes: int = 12 * 1024 * 1024
+    """Second bound on a request, in base64 characters. The native view of a
+    large photograph can approach the upstream body limit on its own."""
+
+    min_region_score: float = 0.6
+    """Detector score floor applied to text regions here, on top of whatever
+    floor the upstream already applies."""
+
+
+class ClassifierUpstreamConfig(_UpstreamConfig):
+    """`language-forensics-service`, on its native /v1/detect."""
+
+    timeout_s: float = 5.0
+    threshold: float | None = None
+    """Override the classifier's own flagging threshold. None = its default."""
+
+    max_text_chars: int = 20000
+    skip_when_no_text: bool = True
+    """Most images carry no text. Skipping the call then keeps the common case
+    to one local pass plus one OCR call."""
+
+
+class RegionsConfig(_Section):
+    """When text *boxes* alone are evidence.
+
+    The screening pass never reads the text, so everything it concludes comes
+    from where boxes appear and where they do not.
+    """
+
+    min_regions: int = 1
+    """Boxes a derived view needs before its disagreement with the native view
+    counts. 1 is right for the attacks this looks for -- one line of
+    instructions is one box."""
+
+    min_area_fraction: float = 0.0005
+    """...and how much of the frame those boxes must cover. Filters a stray
+    box on a noisy rescale without filtering a single line of text."""
+
+
+class _EndpointConfig(_Section):
+    """What every endpoint has: whether it is mounted, and who may call it.
+
+    `api_keys` is a list so a key can be rotated without downtime -- publish
+    the new one, let callers move, drop the old. An empty list leaves the
+    endpoint OPEN; that is per endpoint, not per deployment, and startup says
+    so in as many words.
+    """
+
+    enabled: bool = False
+
+    api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def _split(cls, value: object) -> object:
+        """Accept a comma-separated string as well as a list.
+
+        `NoDecode` turns off pydantic-settings' JSON parsing for this field so
+        that `IFS_ENDPOINTS__DETECT__API_KEYS=k1,k2` works from a compose file
+        or a systemd unit, where writing a JSON array is awkward and an
+        unquoted empty value would be a parse error rather than "no keys".
+        Blank entries are dropped, so an unset variable means open, not a key
+        that is the empty string.
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            # A JSON array is what pydantic-settings would have accepted, so
+            # keep taking it -- splitting `["a","b"]` on commas would silently
+            # produce two keys made of punctuation.
+            if text.startswith("["):
+                try:
+                    value = json.loads(text)
+                except ValueError as exc:
+                    raise ValueError(
+                        "api_keys: looks like a JSON array but does not parse; "
+                        "use a JSON array or a comma-separated list"
+                    ) from exc
+            else:
+                return [part.strip() for part in text.split(",") if part.strip()]
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        return value
+
+
+class _ReportingConfig(_EndpointConfig):
+    """Shared by the two endpoints that return findings rather than a score."""
+
+    flag_threshold: float = 0.5
+    score_decimals: int = 4
+
+    include_text: bool = False
+    """Quote offending text in findings.
+
+    Off by default: two suppliers running different OCR builds return
+    different strings for the same image, so excerpts are the least
+    reproducible part of a report. Useful for a human triaging a hit; noise in
+    anything comparing answers across suppliers.
+    """
+
+
+class CompatConfig(_Section):
+    """The vendor-shaped routes. They are the detection service in someone
+    else's envelope, so they are mounted with it and take its keys."""
+
+    sightengine: bool = True
+    hive: bool = True
+
+
+class DetectEndpoint(_EndpointConfig):
+    """AI-generated image detection: POST /v1/detect.
+
+    The only endpoint that needs a model of its own. What model, and how it is
+    loaded and scored, is the `detector`, `weights`, `runtime` and `scoring`
+    sections -- this repository's original subject, and the part no sibling
+    project provides.
+    """
+
+    enabled: bool = True
+    compat: CompatConfig = Field(default_factory=CompatConfig)
+
+
+class ScreenEndpoint(_ReportingConfig):
+    """Container screening: POST /v1/screen.
+
+    Needs nothing. No model, no sibling service, no GPU -- it reads the file,
+    not the picture. A supplier can serve this from a small box.
+    """
+
+
+class InspectEndpoint(_ReportingConfig):
+    """Prompt-injection inspection: POST /v1/inspect.
+
+    Needs both sibling services: an OCR service for pixels-to-text, and a
+    prompt-injection classifier for text-to-verdict. Loads no model itself.
+    """
+
+    views: ViewsConfig = Field(default_factory=ViewsConfig)
+    regions: RegionsConfig = Field(default_factory=RegionsConfig)
+    ocr: OcrUpstreamConfig = Field(default_factory=OcrUpstreamConfig)
+    classifier: ClassifierUpstreamConfig = Field(default_factory=ClassifierUpstreamConfig)
+
+    @model_validator(mode="after")
+    def _warn_on_inert_upstreams(self) -> InspectEndpoint:
+        if self.enabled and self.ocr.url is None and self.classifier.url is not None:
+            log.warning(
+                "endpoints.inspect.classifier.url is set but ocr.url is not: the "
+                "classifier will only ever see container metadata, never text rendered "
+                "into pixels, which is where these payloads usually are. For metadata "
+                "alone, endpoints.screen needs no upstream at all."
+            )
+        return self
+
+
+class EndpointsConfig(_Section):
+    """The services this deployment serves. Anything not enabled answers 404."""
+
+    detect: DetectEndpoint = Field(default_factory=DetectEndpoint)
+    screen: ScreenEndpoint = Field(default_factory=ScreenEndpoint)
+    inspect: InspectEndpoint = Field(default_factory=InspectEndpoint)
+
+    def get(self, endpoint: Endpoint) -> _EndpointConfig:
+        return getattr(self, endpoint)
+
+    def live(self) -> tuple[Endpoint, ...]:
+        """Endpoints actually mounted.
+
+        An unmounted route cannot be reached, so it is neither a hole to warn
+        about nor an entitlement to grant.
+        """
+        return tuple(name for name in ENDPOINTS if self.get(name).enabled)
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> EndpointsConfig:
+        if not self.live():
+            raise ValueError(
+                "endpoints: every endpoint is disabled, so this deployment would "
+                "serve nothing but its health probes. Enable at least one of: "
+                + ", ".join(ENDPOINTS)
+            )
+        return self
 
 
 class _YamlSource(PydanticBaseSettingsSource):
@@ -202,16 +460,23 @@ class Settings(BaseSettings):
         protected_namespaces=(),
     )
 
-    detector: DetectorConfig
-    """Required. There is deliberately no default: an absent or unreadable
-    config must fail loudly, not silently resolve to some model and fetch it."""
+    endpoints: EndpointsConfig = Field(default_factory=EndpointsConfig)
+    """Which services this deployment serves."""
+
+    detector: DetectorConfig | None = None
+    """Required when `endpoints.detect` is on, and meaningless otherwise.
+
+    There is deliberately no default: a detection deployment whose config is
+    absent or unreadable must fail loudly, not silently resolve to some model
+    and fetch it. A screening-only deployment needs no model at all, so it
+    needs no `detector` section either."""
+
     weights: WeightsConfig = Field(default_factory=WeightsConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
-    api: ApiConfig = Field(default_factory=ApiConfig)
 
     @classmethod
     def settings_customise_sources(
@@ -228,7 +493,7 @@ class Settings(BaseSettings):
         are dead config there. Silently ignoring them makes a misconfiguration
         look like it was applied.
         """
-        if self.detector.backend.endswith("-triton"):
+        if self.detector and self.detector.backend.endswith("-triton"):
             inert = []
             if self.weights.dir is not None or self.weights.source != "auto":
                 inert.append("weights")
@@ -246,7 +511,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _warn_on_ignored_weights(self) -> Settings:
-        if self.detector.path and (
+        if self.detector and self.detector.path and (
             self.weights.dir is not None or self.weights.source != "auto"
         ):
             log.warning(
@@ -256,8 +521,27 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _detect_needs_a_model(self) -> Settings:
+        """The one cross-section rule: detection needs something to detect with.
+
+        Screening needs no model and inspection borrows two from sibling
+        services, so `detector` is required only for this one endpoint -- and
+        is required *loudly*, rather than defaulted into fetching something
+        nobody chose.
+        """
+        if self.endpoints.detect.enabled and self.detector is None:
+            raise ValueError(
+                "endpoints.detect is enabled but there is no `detector` section. "
+                "Detection is the only endpoint that needs a model of its own; "
+                "name one, or set endpoints.detect.enabled: false."
+            )
+        return self
+
     def detector_kwargs(self) -> dict[str, Any]:
         """Everything the backend factory needs, assembled in one place."""
+        if self.detector is None:
+            raise RuntimeError("no detector configured")
         return {
             "model": self.detector.model,
             "path": self.detector.path,
