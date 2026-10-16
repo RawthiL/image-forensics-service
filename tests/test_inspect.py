@@ -8,6 +8,7 @@ victim's preprocessing would see it.
 
 import base64
 import io
+import json
 from functools import partial
 
 import httpx
@@ -662,6 +663,115 @@ def test_each_endpoint_is_mounted_independently(inspect_client):
         # detect defaults on, but a screening-only deployment turns it off and
         # then needs no `detector` section at all.
         assert client.post("/v1/detect", files=files).status_code == 404
+
+
+# --- JSON bodies ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/v1/screen", "/v1/inspect"])
+def test_json_media_base64_matches_the_multipart_answer(inspect_client, path):
+    raw = with_metadata(PAYLOAD)
+    with inspect_client(FakeUpstreams()) as client:
+        form = client.post(path, files={"media": ("x.png", raw, "image/png")}).json()
+        sent = client.post(path, json={"media_base64": base64.b64encode(raw).decode()})
+        data_uri = f"data:image/png;base64,{base64.b64encode(raw).decode()}"
+        uri = client.post(path, json={"media_base64": data_uri})
+    assert sent.status_code == 200, sent.text
+    assert uri.status_code == 200, uri.text
+    for body in (sent.json(), uri.json()):
+        assert body["findings"] == form["findings"]
+        assert body["verdict"] == form["verdict"]
+
+
+@pytest.mark.parametrize("path", ["/v1/screen", "/v1/inspect"])
+def test_json_url_reaches_the_url_loader(inspect_client, path):
+    # URL fetching is off by default, so reaching *that* refusal proves the
+    # field was read rather than reported missing.
+    with inspect_client(FakeUpstreams()) as client:
+        response = client.post(path, json={"url": "https://example.com/x.png"})
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "url_fetch_disabled"
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    [
+        ({}, "missing_media"),
+        ({"url": "https://example.com/x.png", "media_base64": "AAAA"}, "ambiguous_media"),
+        ({"media": "AAAA"}, "invalid_json"),
+        ({"media_base64": 12}, "invalid_json"),
+        (["media_base64"], "invalid_json"),
+        ({"media_base64": "not base64!"}, "invalid_base64"),
+    ],
+)
+def test_json_bodies_are_held_to_the_same_rules(inspect_client, body, code):
+    with inspect_client(FakeUpstreams()) as client:
+        response = client.post("/v1/screen", json=body)
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["type"] == code
+
+
+@pytest.mark.parametrize("path", ["/v1/screen", "/v1/inspect"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({"content-type": "application/x-protobuf"}, id="relay-envelope"),
+        pytest.param({"content-type": "application/octet-stream"}, id="opaque"),
+        pytest.param({}, id="none"),
+    ],
+)
+def test_a_json_body_is_read_whatever_the_content_type_says(
+    inspect_client, path, headers
+):
+    """What arrives after a hop is not what the client sent.
+
+    A relay or proxy rewrites, drops or backfills `Content-Type` -- a
+    RelayMiner fills in the relay envelope's for anything the gateway left
+    unset. Trusting the header would make this work on a laptop and 400 in
+    front of a relay, so the body decides.
+    """
+    raw = with_metadata(PAYLOAD)
+    body = json.dumps({"media_base64": base64.b64encode(raw).decode()}).encode()
+    with inspect_client(FakeUpstreams()) as client:
+        response = client.post(path, content=body, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["verdict"] == "malicious"
+
+
+def test_a_json_error_never_advertises_a_file_field(inspect_client):
+    """The message must name only what a JSON body can carry.
+
+    An error offering `media (file)` to a caller who cannot send one is the
+    bug that started this: advertising a field the body has no way to hold.
+    """
+    with inspect_client(FakeUpstreams()) as client:
+        empty = client.post(
+            "/v1/screen", content=b"", headers={"content-type": "application/json"}
+        )
+        both = client.post(
+            "/v1/screen", json={"url": "https://example.com/x.png", "media_base64": "AAAA"}
+        )
+        form = client.post("/v1/screen")
+    assert empty.status_code == 400
+    assert empty.json()["error"]["type"] == "missing_media"
+    for response in (empty, both):
+        message = response.json()["error"]["message"]
+        assert "media (file)" not in message
+        assert "url or media_base64" in message
+    # The form path still names all three.
+    assert "media (file)" in form.json()["error"]["message"]
+
+
+def test_malformed_and_oversized_json_are_refused(inspect_client):
+    with inspect_client(FakeUpstreams()) as client:
+        bad = client.post(
+            "/v1/screen", content=b"{not json", headers={"content-type": "application/json"}
+        )
+        huge = client.post("/v1/screen", json={"media_base64": "A" * (21 * 1024 * 1024)})
+    assert bad.status_code == 400
+    assert bad.json()["error"]["type"] == "invalid_json"
+    assert huge.status_code == 413
+    assert huge.json()["error"]["type"] == "media_too_large"
 
 
 def test_xmp_packet_wrapper_is_not_a_smuggling_finding():

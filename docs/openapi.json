@@ -100,6 +100,21 @@
               "schema": {
                 "$ref": "#/components/schemas/Body_detect_v1_detect_post"
               }
+            },
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "URL of an image to fetch"
+                  },
+                  "media_base64": {
+                    "type": "string",
+                    "description": "Base64 image, data: URL accepted"
+                  }
+                },
+                "type": "object"
+              }
             }
           }
         },
@@ -366,6 +381,21 @@
               "schema": {
                 "$ref": "#/components/schemas/Body_screen_v1_screen_post"
               }
+            },
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "URL of an image to fetch"
+                  },
+                  "media_base64": {
+                    "type": "string",
+                    "description": "Base64 image, data: URL accepted"
+                  }
+                },
+                "type": "object"
+              }
             }
           }
         },
@@ -416,6 +446,21 @@
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/Body_inspect_v1_inspect_post"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "URL of an image to fetch"
+                  },
+                  "media_base64": {
+                    "type": "string",
+                    "description": "Base64 image, data: URL accepted"
+                  }
+                },
+                "type": "object"
               }
             }
           }

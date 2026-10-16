@@ -1,5 +1,8 @@
 """The contract that matters: responses must match the vendors' documented shapes."""
 
+import base64
+import json
+
 
 def test_native_detect(client, png_bytes):
     r = client.post("/v1/detect", files={"media": ("x.png", png_bytes, "image/png")})
@@ -51,6 +54,35 @@ def test_missing_media_is_a_400(client):
     r = client.post("/v1/detect")
     assert r.status_code == 400
     assert r.json()["error"]["type"] == "missing_media"
+
+
+def test_native_detect_accepts_a_json_body(client, png_bytes):
+    """`/v1/detect` takes the same JSON body as `/v1/screen` and `/v1/inspect`."""
+    encoded = base64.b64encode(png_bytes).decode()
+    form = client.post("/v1/detect", files={"media": ("x.png", png_bytes, "image/png")}).json()
+    sent = client.post("/v1/detect", json={"media_base64": encoded})
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["ai_generated"] == form["ai_generated"]
+    assert sent.json()["pipeline_fingerprint"] == form["pipeline_fingerprint"]
+
+
+def test_detect_reads_json_under_any_content_type(client, png_bytes):
+    """After a relay or proxy hop, the content type is not the client's."""
+    body = json.dumps({"media_base64": base64.b64encode(png_bytes).decode()}).encode()
+    r = client.post("/v1/detect", content=body, headers={"content-type": "application/x-protobuf"})
+    assert r.status_code == 200, r.text
+    assert 0.0 <= r.json()["ai_generated"] <= 1.0
+
+
+def test_vendor_dialects_stay_form_only(client, png_bytes):
+    """A JSON body is not part of either vendor's documented contract.
+
+    They must answer the way the vendor would -- with a missing-media error,
+    not a success -- or the swap-the-base-URL promise is broken.
+    """
+    body = {"media_base64": base64.b64encode(png_bytes).decode()}
+    assert client.post("/1.0/check.json", json=body).status_code == 400
+    assert client.post("/api/v2/task/sync", json=body).status_code == 400
 
 
 def test_models_endpoint_reports_backend(client):

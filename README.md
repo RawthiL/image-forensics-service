@@ -376,10 +376,10 @@ Swagger UI at `/docs`.
 | `GET /healthz` | Liveness (no auth) | — |
 | `GET /readyz` | `200` once every served endpoint is up (no auth) | — |
 
-All three take the same `multipart/form-data` body and reject the same inputs,
-so a caller that can reach one can reach the others unchanged.
+All three take the same body and reject the same inputs, so a caller that can
+reach one can reach the others unchanged.
 
-The request body is `multipart/form-data`:
+As `multipart/form-data`:
 
 | Field | Notes |
 |-------|-------|

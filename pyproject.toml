@@ -1,6 +1,6 @@
 [project]
 name = "image-forensics-service"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI-generated image detection served behind its own OpenAPI plus Sightengine- and Hive-compatible layers."
 license = "MIT"
 readme = "README.md"

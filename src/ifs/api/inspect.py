@@ -27,11 +27,11 @@ after a downscale.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from ..inspection.report import InspectionReport
-from .deps import InspectorDep, SettingsDep, load_one
+from .deps import JSON_BODY_DOC, InspectorDep, SettingsDep, load_request
 
 screen_router = APIRouter(prefix="/v1", tags=["screening"])
 router = APIRouter(prefix="/v1", tags=["inspection"])
@@ -85,15 +85,17 @@ class AnalysisResponse(BaseModel):
     "/screen",
     response_model=AnalysisResponse,
     summary="Screen the image container (no model, no upstream)",
+    openapi_extra=JSON_BODY_DOC,
 )
 async def screen(
+    request: Request,
     inspector: InspectorDep,
     settings: SettingsDep,
     media: UploadFile | None = File(None, description="Image file upload"),
     url: str | None = Form(None, description="URL of an image to fetch"),
     media_base64: str | None = Form(None, description="Base64 image, data: URL accepted"),
 ) -> AnalysisResponse:
-    loaded = await _load(settings, media, url, media_base64)
+    loaded = await _load(request, settings, media, url, media_base64)
     report = await inspector.screen(loaded.image, loaded.container)
     return _render(report, inspector, settings.endpoints.screen.flag_threshold)
 
@@ -102,23 +104,28 @@ async def screen(
     "/inspect",
     response_model=AnalysisResponse,
     summary="Inspect an image for an embedded prompt injection",
+    openapi_extra=JSON_BODY_DOC,
 )
 async def inspect(
+    request: Request,
     inspector: InspectorDep,
     settings: SettingsDep,
     media: UploadFile | None = File(None, description="Image file upload"),
     url: str | None = Form(None, description="URL of an image to fetch"),
     media_base64: str | None = Form(None, description="Base64 image, data: URL accepted"),
 ) -> AnalysisResponse:
-    loaded = await _load(settings, media, url, media_base64)
+    loaded = await _load(request, settings, media, url, media_base64)
     report = await inspector.inspect(loaded.image, loaded.container)
     return _render(report, inspector, settings.endpoints.inspect.flag_threshold)
 
 
-async def _load(settings, upload, url, b64):
+async def _load(request, settings, upload, url, b64):
+    # Agents and other non-browser callers send JSON, so the body may also be
+    # `{"url": ...}` or `{"media_base64": ...}` -- the same fields, no file.
+    #
     # keep_raw: the container *is* the evidence for the screening endpoint,
     # and Pillow has thrown it away by the time it hands back pixels.
-    return await load_one(settings=settings, upload=upload, url=url, b64=b64, keep_raw=True)
+    return await load_request(request, settings, upload, url, b64, keep_raw=True)
 
 
 def _render(report: InspectionReport, inspector, threshold: float) -> AnalysisResponse:

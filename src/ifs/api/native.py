@@ -6,10 +6,10 @@ who already wrote against Sightengine or Hive.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from .deps import ServiceDep, SettingsDep, load_one
+from .deps import JSON_BODY_DOC, ServiceDep, SettingsDep, load_request
 
 router = APIRouter(prefix="/v1", tags=["detection"])
 
@@ -26,15 +26,23 @@ class DetectResponse(BaseModel):
     elapsed_ms: float
 
 
-@router.post("/detect", response_model=DetectResponse, summary="Score one image")
+@router.post(
+    "/detect",
+    response_model=DetectResponse,
+    summary="Score one image",
+    openapi_extra=JSON_BODY_DOC,
+)
 async def detect(
+    request: Request,
     service: ServiceDep,
     settings: SettingsDep,
     media: UploadFile | None = File(None, description="Image file upload"),
     url: str | None = Form(None, description="URL of an image to fetch"),
     media_base64: str | None = Form(None, description="Base64 image, data: URL accepted"),
 ) -> DetectResponse:
-    loaded = await load_one(settings=settings, upload=media, url=url, b64=media_base64)
+    # Same body rules as the other two native routes: a form, or a JSON object
+    # carrying `url` or `media_base64`. The vendor dialects stay form-only.
+    loaded = await load_request(request, settings, media, url, media_base64)
     scored = await service.score(loaded.image)
     return DetectResponse(
         ai_generated=scored.result.ai_generated,
