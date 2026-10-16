@@ -5,7 +5,9 @@ Docs:    https://docs.thehive.ai/docs/ai-image-and-video-detection
          https://docs.thehive.ai/reference/authentication
 
 Like the Sightengine dialect, the `Authorization: token ...` header is accepted
-and ignored -- the swap is the whole point.
+and ignored -- the swap is the whole point -- and like it, this is a superset:
+the vendor's own fields plus `media_base64`, so a caller without a multipart
+body builder is not pushed onto a different dialect.
 """
 
 from __future__ import annotations
@@ -26,9 +28,10 @@ async def task_sync(
     settings: SettingsDep,
     media: UploadFile | None = File(None),
     url: str | None = Form(None),
+    media_base64: str | None = Form(None),  # extension: not a vendor field
     authorization: str | None = Header(None),  # accepted, ignored
 ) -> HiveTaskResponse:
-    loaded = await load_one(settings=settings, upload=media, url=url)
+    loaded = await load_one(settings=settings, upload=media, url=url, b64=media_base64)
     scored = await service.score(loaded.image)
     return HiveTaskResponse.build(
         task_id=secrets.token_hex(16),

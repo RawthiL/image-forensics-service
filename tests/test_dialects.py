@@ -74,6 +74,34 @@ def test_detect_reads_json_under_any_content_type(client, png_bytes):
     assert 0.0 <= r.json()["ai_generated"] <= 1.0
 
 
+def test_dialects_accept_media_base64(client, png_bytes):
+    """A superset: the vendor's own fields, plus base64 for callers without forms."""
+    encoded = base64.b64encode(png_bytes).decode()
+    sight = client.post("/1.0/check.json", data={"media_base64": encoded, "models": "genai"})
+    hive = client.post("/api/v2/task/sync", data={"media_base64": encoded})
+    assert sight.status_code == 200, sight.text
+    assert sight.json()["status"] == "success"
+    assert 0.0 <= sight.json()["type"]["ai_generated"] <= 1.0
+    assert hive.status_code == 200, hive.text
+    classes = hive.json()["status"][0]["response"]["output"][0]["classes"]
+    assert "ai_generated" in {c["class"] for c in classes}
+
+
+def test_dialect_errors_name_only_reachable_fields(client, png_bytes):
+    """A `GET` carries no body, so offering `media` or base64 would be a lie."""
+    missing = client.post("/1.0/check.json").json()["error"]["message"]
+    assert missing == "provide one of: media (file), url, or media_base64"
+    blank = client.get("/1.0/check.json?url=")
+    assert blank.status_code == 400
+    assert blank.json()["error"]["message"] == "provide url"
+    both = client.post(
+        "/api/v2/task/sync",
+        data={"media_base64": base64.b64encode(png_bytes).decode(), "url": "https://e.com/x.png"},
+    )
+    assert both.status_code == 400
+    assert both.json()["error"]["type"] == "ambiguous_media"
+
+
 def test_vendor_dialects_stay_form_only(client, png_bytes):
     """A JSON body is not part of either vendor's documented contract.
 

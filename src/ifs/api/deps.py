@@ -26,6 +26,23 @@ InspectorDep = Annotated[InspectionService, Depends(get_inspector)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
+#: Every input field, and what to call it in an error.
+_LABELS = {"media": "media (file)", "url": "url", "media_base64": "media_base64"}
+
+ALL_FIELDS = ("media", "url", "media_base64")
+JSON_FIELDS = ("url", "media_base64")  # a JSON body carries no file
+URL_ONLY = ("url",)  # a GET carries nothing else
+
+
+def _names(fields: tuple[str, ...]) -> str:
+    labels = [_LABELS[f] for f in fields]
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return " or ".join(labels)
+    return ", ".join(labels[:-1]) + ", or " + labels[-1]
+
+
 async def load_one(
     *,
     settings: Settings,
@@ -33,21 +50,23 @@ async def load_one(
     url: str | None = None,
     b64: str | None = None,
     keep_raw: bool = False,
-    accepts_file: bool = True,
+    accepts: tuple[str, ...] = ALL_FIELDS,
 ) -> LoadedMedia:
     """Resolve whichever of the three input forms the caller used.
 
     `keep_raw` retains the original container bytes, which only `/v1/inspect`
     needs -- see `LoadedMedia`.
 
-    `accepts_file` is False when the body was JSON, which carries no file. The
-    error then lists only the fields that body could have held, because an
-    error advertising a field the caller cannot use is how this started.
+    `accepts` is what *this* route can read, and exists only so the error says
+    so: an error advertising a field the caller has no way to send is how this
+    started, and a JSON body (no file) and a GET (no body) each accept less
+    than the full set.
     """
-    fields = "media (file), url, or media_base64" if accepts_file else "url or media_base64"
+    fields = _names(accepts)
     provided = [x for x in (upload, url, b64) if x]
     if not provided:
-        raise MediaError(f"provide one of: {fields}", code="missing_media")
+        verb = "provide" if len(accepts) == 1 else "provide one of:"
+        raise MediaError(f"{verb} {fields}", code="missing_media")
     if len(provided) > 1:
         raise MediaError(f"provide exactly one of: {fields}", code="ambiguous_media")
 
@@ -181,9 +200,13 @@ async def load_request(
     if not body.strip():
         # Nothing to parse. A caller who announced JSON gets the JSON fields;
         # one who sent no body at all could have meant either, so name all three.
-        return await load_one(settings=settings, keep_raw=keep_raw, accepts_file=kind != "json")
+        return await load_one(
+            settings=settings,
+            keep_raw=keep_raw,
+            accepts=JSON_FIELDS if kind == "json" else ALL_FIELDS,
+        )
 
     url, b64 = json_media_fields(body, declared=kind == "json")
     return await load_one(
-        settings=settings, url=url, b64=b64, keep_raw=keep_raw, accepts_file=False
+        settings=settings, url=url, b64=b64, keep_raw=keep_raw, accepts=JSON_FIELDS
     )

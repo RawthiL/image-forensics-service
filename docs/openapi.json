@@ -594,6 +594,17 @@
             ],
             "title": "Url"
           },
+          "media_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Base64"
+          },
           "models": {
             "type": "string",
             "title": "Models",
@@ -778,6 +789,17 @@
               }
             ],
             "title": "Url"
+          },
+          "media_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Base64"
           }
         },
         "type": "object",

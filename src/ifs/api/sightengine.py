@@ -14,6 +14,11 @@ client only has to change its base URL:
 `api_user` / `api_secret` are accepted and ignored on purpose. On Pocket the
 relay is already paid and authenticated at the gateway, so rejecting a missing
 key would break the one-line swap this dialect exists to enable.
+
+The dialect is a *superset*: a strict vendor-shaped call works untouched, and
+`media_base64` is accepted alongside the vendor's own fields because a caller
+that cannot build a multipart body should not have to speak a second dialect to
+reach the same model.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import time
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from ..schemas.sightengine import SightengineResponse
-from .deps import ServiceDep, SettingsDep, load_one
+from .deps import URL_ONLY, ServiceDep, SettingsDep, load_one
 
 router = APIRouter(tags=["compat: sightengine"])
 
@@ -61,11 +66,12 @@ async def check_post(
     settings: SettingsDep,
     media: UploadFile | None = File(None),
     url: str | None = Form(None),
+    media_base64: str | None = Form(None),  # extension: not a vendor field
     models: str = Form("genai"),
     api_user: str | None = Form(None),    # accepted, ignored
     api_secret: str | None = Form(None),  # accepted, ignored
 ) -> SightengineResponse:
-    loaded = await load_one(settings=settings, upload=media, url=url)
+    loaded = await load_one(settings=settings, upload=media, url=url, b64=media_base64)
     return await _check(service, settings, image=loaded.image, uri=url)
 
 
@@ -82,5 +88,6 @@ async def check_get(
     api_user: str | None = Query(None),    # accepted, ignored
     api_secret: str | None = Query(None),  # accepted, ignored
 ) -> SightengineResponse:
-    loaded = await load_one(settings=settings, url=url)
+    # A GET carries no body, so `url` is all there is -- and all the error names.
+    loaded = await load_one(settings=settings, url=url, accepts=URL_ONLY)
     return await _check(service, settings, image=loaded.image, uri=url)

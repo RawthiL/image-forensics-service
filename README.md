@@ -387,6 +387,27 @@ As `multipart/form-data`:
 | `url` | Alternative to `media`: an `http(s)` URL to fetch. **Off by default** — see [Security and limits](#security-and-limits) |
 | `media_base64` | Alternative to both: base64 string or `data:` URI |
 
+…or as `application/json`, for callers that do not build forms:
+
+```json
+{"media_base64": "iVBORw0KGgo…"}
+```
+
+Same fields, same one-of-three rule, minus `media`: JSON carries no file, so the
+bytes go in `media_base64` and asking for `media` is an error that says so. The
+JSON body is read with a cap — base64 of the largest accepted image plus slack —
+so an oversized request is refused before it is buffered whole. Every error
+names only the fields the body it arrived in can actually carry.
+
+**The body is identified by its bytes, not by `Content-Type`.** A request that
+crossed a relay or a proxy arrives with whatever headers that hop chose to
+carry, and a RelayMiner backfills the ones the gateway left unset from the relay
+envelope — which is not what the client sent. A header-driven parser would work
+against the container directly and `400` behind a relay. Only
+`multipart/form-data` is recognised by its content type, because the boundary it
+carries is not optional — which is the other reason a relayed caller should send
+JSON: a form body is the one that needs its header to survive the hop.
+
 The response carries the score plus two fingerprints. Every error is returned as
 `{"status": "failure", "error": {"type": "…", "message": "…"}}` with a fitting
 HTTP status.
@@ -405,6 +426,12 @@ Of the two, **Sightengine is the better-supported target**: its users are the
 swap-a-base-URL population, and its flat single-float response maps cleanly onto
 ours. Hive's ~80-name per-generator head is approximated, since no shipped
 backend produces one.
+
+**Both layers are supersets, by one field.** A strict vendor-shaped call works
+untouched; `media_base64` is accepted alongside the vendor's own `media` and
+`url` so that a caller without a multipart body builder is not pushed onto a
+second dialect to reach the same model. They stay form-only — neither vendor
+documents a JSON body, and inventing one is a contract no client asked for.
 
 **Vendor API keys are accepted and ignored.** `api_user`, `api_secret` and
 `Authorization: token …` are parsed and discarded rather than rejected — a
@@ -487,6 +514,12 @@ model runs in fp16, because at half precision the tails saturate to exactly
 - The key arrives as `X-API-Key` or `Authorization: Bearer …`. **Only the
   `Bearer` scheme is read** from `Authorization`, so a Hive client's
   `Authorization: token …` is never mistaken for the service key.
+- **Do not expect the key to arrive from a gateway's caller.** It is a
+  deployment boundary, not a user credential, and a client header may not
+  survive the relay hop at all. The supplier sets it on the RelayMiner's backend
+  pool (`services.<id>.backends.<name>.headers` in the relayer config), which is
+  applied to every backend request, so that only that RelayMiner can reach the
+  container.
 - `/healthz` and `/readyz` stay open — an orchestrator's probe has no business
   holding a key. `/v1/models` is gated, accepts any served endpoint's key, and
   **answers with the sections that key is entitled to**: a screening key does
